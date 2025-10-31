@@ -1,0 +1,59 @@
+Journal Format Guide (Immutable)
+--------------------------------
+Purpose:
+- Maintain a chronological, prompt-scoped record of development actions and rationale.
+- Provide quick traceability from instructions to filesystem changes.
+Usage and Content Rules:
+- Treat this guide as read-only; future sessions must not alter this section.
+- For each prompt, record the exact prompt text on a single line beginning with `Prompt:`.
+- Under each prompt entry, use leading `-` bullets for every file or directory that was created or modified in response.
+- For each file/directory bullet, indent nested `-` bullets (two spaces) describing the specific sections or actions (2-10 bullets), focusing on what changed and why.
+- Reference paths relative to the project root.
+
+Prompt: please create a folder in this directory; let's use that for this new project. call the project folder 'bootbox-mcu-fw' and set that as the working directory. please hold off initiating an AGENTS.md file for now, or any other setup -- we'll do that later, after I have explained the project objectives. We will, however, journal all work done (along with rationale notes) as we go, to be rigorously maintained throughout this development session. Journal is to be written hierarchically (by prompt) in a top-level text file called 'journal.txt'. to this file you will append the working prompt I have given, then dot points underneath the prompt list the files created or modified, under each of which you will concisely list sections changed/added to that file along with a summary of what was changed and why. each section change entry should only be ~2-10 dot points depending on complexity. please define the format and content rules & the purpose of the journal document in an immutable section at the very top, to be used as a guide in future sessions.
+- bootbox-mcu-fw/
+  - Created project root directory to house forthcoming firmware sources per user request.
+- bootbox-mcu-fw/journal.txt
+  - Established immutable journal guide to lock formatting and usage expectations.
+  - Logged current prompt entry documenting initial setup actions.
+Prompt: I have installed the fedora fork of github desktop, and I'll sign into that now - but could you please also setup a full toolchain using github cli (for your use, linked to my github account) for development on the ESP32 platform? I use arduino-esp32, not espressif-idf for projects usually, so please install arduino and the esp32 extensions and related bits and pieces -- but also all cli tools including those from espressif, as I would like the flexibility when it comes to building and debugging. please also set up node/npm, and make sure my python environment is sane and ready for development both on embedded (atmel/esp32) and desktop linux. Please install anything else you think I ought to have on this dev machine, which is currently vanilla Fedora but will be my primary dev desktop fo
+- ../.local/bin/gh
+  - Installed GitHub CLI 2.82.1 as a user-level binary to enable gh-driven workflows without root.
+  - Ensured supporting manual assets land alongside the binary for offline documentation.
+- ../.local/share/gh
+  - Populated CLI manpage hierarchy to integrate with local help tooling.
+  - Mirrors upstream structure so `man gh` resolves when PATH is updated.
+- ../.bashrc
+  - Added explicit PATH export for ../.local/bin so user-installed tools are available in new shells.
+  - Declared IDF_PATH and a get_idf alias to simplify ESP-IDF environment activation.
+  - Accepted nvm initialization hooks enabling Node version management on login.
+- ../.local/bin/arduino-cli
+  - Installed Arduino CLI 1.3.1 for headless Arduino workflows tied to the esp32 core.
+  - Configured board manager settings pointing at arduino-esp32 package indices.
+  - Established cache priming to allow later offline installs without redownloading assets.
+- ../.arduino15/
+  - Generated arduino-cli configuration plus package metadata for Arduino ecosystem tooling.
+  - Prefetched ESP32 board core 3.3.2 and dependent tool archives for reliable installation.
+  - Materialized esp32:esp32@3.3.2 into the local platform registry for immediate use.
+- ../Applications/arduino-ide_2.3.6_Linux_64bit/
+  - Unpacked Arduino IDE 2.3.6 to furnish a GUI companion to the CLI toolset.
+  - Normalized executable permissions so the IDE can launch directly from disk.
+- ../.local/bin/arduino-ide
+  - Added symlink into user bin pointing at the IDE launcher for convenient CLI access.
+  - Keeps GUI integration aligned with the rest of the user-scoped binaries.
+- ../esp/esp-idf/
+  - Cloned ESP-IDF v5.3.2 to provide full IDF sources and tools alongside Arduino support.
+  - Verified idf.py availability via export.sh for cross-target builds and debugging.
+- ../.espressif/
+  - Installed xtensa/riscv toolchains, OpenOCD, and supporting ESP-IDF utilities in user space.
+  - Provisioned dedicated Python environment and idf-env metadata for repeatable setups.
+- ../.nvm/
+  - Deployed nvm v0.39.7 to manage Node runtimes without system package manager access.
+  - Installed Node.js LTS v24.11.0 and set it as the default for JavaScript tooling.
+- ../.local/share/pipx/
+  - Initialized pipx to isolate Python CLIs such as platformio and esptool.
+  - Installed platformio 6.1.18 and esptool 5.1.0 for AVR/ESP flashing and project scaffolding.
+- journal.txt
+  - Captured tooling setup actions per prompt to maintain the mandated development log.
+Prompt: please check all is A-ok, confirming github access by setting up a new repo by the same name and checking it is accessible. Our project is to write the firmware for the ESP32 system controller MCU which lives in my DIY car stereo system. The main responsibilities of the mcu are to control parameters of an ADAU1701 DSP module and possibly implement MCU booting or upload alternate binary presets, which would be uploadable by the user using a web interface or later an app. I want the web interface to be consistently of high quality, use error-checked and highly stable websockets for communication and feedback, and implement various UI controls I can easily map to parameters set in SigmaStudio. The controls I plan to implement later on, but i would like the groundwork to be in place and considered whilst we implement the more immediate concern and second priority overall: thermal management/fan control. I have two through-flowing 4-wire fans on the enclosure, and one or two thermistors in key locations - lets call them 'temp1' and 'temp2' for now. i want to be able to monitor these temperatures, as well as the absolute current and target fan speed (in either percentage or RPM) in the web interface, and adjust the target temperature setpoints there too, which are to be stored in non-volatile memory. I'd like also to be able to switch between PID and manual speed control, in a persistent manner. the esp should spin up an AP at boot in order to host the web interface, with the ssid 'BOOTBOXDSP' and password 'lollipop'. I want a high focus on reliability, immediacy and smoothness of controls, and for the communication protocol between user device and the MCU to be modularised and consistent to allow for optimisation.
+- (no filesystem changes)
