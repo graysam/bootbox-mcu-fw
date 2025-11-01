@@ -103,3 +103,11 @@ Prompt: please continue fleshing out the next steps you've suggested including t
   - Wired new controls into `set_settings`; added `get_logs` WS action and UI rendering of logs.
 - README.md
   - Created friendly documentation: build steps (arduino-cli), feature overview, endpoints, and prototype hardware pinout.
+Prompt: please add a global switch for 3-wire/4-wire fans, alongside variables where pin assignments are set. all build-time settings should reside in a single config. Ensure 3-wire fans are handled appropriately on output and monitoring.
+- firmware/arduino/bootbox_mcu_fw/config.h
+  - Added centralized build-time configuration, including `kFanType` (3-wire/4-wire), pin assignments, and PWM parameters.
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
+  - Switched to `config.h` pin map and PWM settings; applied min start duty for 3-wire fans; unified LEDC setup via config.
+  - Adjusted ADC-to-temp helper to use config constants; noted tach behavior differences at low duty for 3-wire.
+- README.md
+  - Documented the new `config.h` and how to select fan type and pins.

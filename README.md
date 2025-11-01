@@ -20,9 +20,11 @@ Firmware for an ESP32-based system controller for a DIY car stereo using an ADAU
 
 ## Hardware Connections (prototype)
 - Thermistors (NTC) to analog: `temp1 -> GPIO34`, `temp2 -> GPIO35`. Use voltage dividers to 3.3V; adjust ADC-to-temp curve in code.
-- Fan control (4-wire PC fan):
-  - PWM: GPIO25 (25 kHz, 8-bit via LEDC). Pull-up per fan spec.
-  - Tach: GPIO27 (TODO: PCNT-based RPM). Open collector; add pull-up.
+- Fan control:
+  - Global setting in `firmware/arduino/bootbox_mcu_fw/config.h` → `kFanType` (`Fan3Wire` or `Fan4Wire`).
+  - Control pin: `PIN_FAN_CTRL` (PWM). For 4-wire, this is the control pin; for 3-wire, drive fan power via MOSFET.
+  - Tach: `PIN_FAN_TACH` (open collector; add pull-up). RPM measurement pending (PCNT/RMT).
+  - PWM freq: 4-wire uses 25 kHz; 3-wire default 1 kHz (configurable). 3-wire applies a minimum start duty to avoid stall.
 - ADAU1701: I2C for control (future): `SDA -> GPIO21`, `SCL -> GPIO22`. SPI/I2S for audio as needed by your module (not yet used here).
 
 ## Libraries
@@ -31,3 +33,4 @@ Firmware for an ESP32-based system controller for a DIY car stereo using an ADAU
 ## Notes
 - Upload Security: toggle uploads and optional bearer token in the UI. Avoid leaving uploads enabled in production.
 - Tuning: adjust PID gains in UI. Setpoints default to 45/55°C. Replace `adcToTempC()` with your NTC curve.
+- Build-time config: edit `firmware/arduino/bootbox_mcu_fw/config.h` to set fan type, pins, and PWM parameters.

@@ -6,6 +6,7 @@
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 
+#include "config.h"
 #include "settings.h"
 
 // ---- WiFi AP config ----
@@ -15,13 +16,6 @@ static const char* AP_PASS = "lollipop"; // WPA2-PSK
 // ---- Web server and WebSocket ----
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
-
-// ---- Hardware mapping (prototype defaults) ----
-// Update in README.md to match your dev board
-#define PIN_FAN_PWM   25   // 4-wire PWM control (25 kHz)
-#define PIN_FAN_TACH  27   // fan tach input (TODO: PCNT)
-#define PIN_THERM1    34   // analog input for temp1 (NTC divider)
-#define PIN_THERM2    35   // analog input for temp2 (NTC divider)
 
 // ---- State model (initial, expanded later) ----
 struct RuntimeState {
@@ -262,7 +256,7 @@ static void initWiFiAP() {
 static float adcToTempC(int adc) {
   // Placeholder: map raw ADC to degrees C. Replace with NTC curve.
   // For now, simulate ~25-80C range over 0..4095
-  return 25.0f + (adc / 4095.0f) * 55.0f;
+  return TEMP_MIN_C + (adc / 4095.0f) * TEMP_SPAN_C;
 }
 
 static void sampleSensors() {
@@ -282,8 +276,11 @@ static uint32_t pid_prev_ms = 0;
 static void applyFanOutput(uint8_t pct) {
   pct = (pct > 100) ? 100 : pct;
   state.fan_target_pct = pct;
-  uint32_t duty = map(pct, 0, 100, 0, 255);
-  ledcWrite(0, duty);
+  // 3-wire fans: enforce a minimum start duty to avoid stall.
+  if (kFanType == FanType::Fan3Wire && pct > 0 && pct < FAN3_MIN_START_PCT) pct = FAN3_MIN_START_PCT;
+  uint32_t duty = map(pct, 0, 100, 0, (1 << FAN_PWM_RES_BITS) - 1);
+  ledcWrite(FAN_PWM_CHANNEL, duty);
+  // Tach handling note: at low duty on 3-wire, tach pulses may be intermittent.
 }
 
 static void controlLoop() {
@@ -326,9 +323,10 @@ void setup() {
 
   initWiFiAP();
 
-  // Fan PWM (25 kHz, 8-bit)
-  ledcSetup(0, 25000, 8);
-  ledcAttachPin(PIN_FAN_PWM, 0);
+  // Fan PWM setup
+  const int pwm_freq = (kFanType == FanType::Fan4Wire) ? FAN_PWM_FREQ_4WIRE : FAN_PWM_FREQ_3WIRE;
+  ledcSetup(FAN_PWM_CHANNEL, pwm_freq, FAN_PWM_RES_BITS);
+  ledcAttachPin(PIN_FAN_CTRL, FAN_PWM_CHANNEL);
   applyFanOutput(settings.pid_enabled ? 20 : settings.fan_manual_pct);
 
   ws.onEvent(onWsEvent);
