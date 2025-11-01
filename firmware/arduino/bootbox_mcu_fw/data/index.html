@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BOOTBOX DSP Controller</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; background:#0b0f14; color:#e8eef4; }
+      header { display:flex; align-items:center; gap:12px; }
+      .badge { padding:2px 8px; border-radius:12px; background:#1c2733; font-size: 12px; }
+      .row { display:flex; gap:16px; flex-wrap: wrap; margin-top: 16px; }
+      .card { background:#111823; border:1px solid #1e2a39; border-radius:10px; padding:16px; min-width:260px; flex:1; }
+      label { display:block; margin-top:8px; font-size: 14px; color:#b7c7d9; }
+      input[type="number"], select { width:100%; padding:8px; border-radius:8px; border:1px solid #2a3a4f; background:#0e1520; color:#d8e5f1; }
+      button { background:#2b5cff; color:white; border:none; border-radius:8px; padding:10px 14px; cursor:pointer; }
+      button.secondary { background:#1c2733; }
+      .kv { display:grid; grid-template-columns: 1fr auto; gap:6px 16px; }
+      .kv div:last-child { font-variant-numeric: tabular-nums; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h2 style="margin:0">BOOTBOX DSP</h2>
+      <span id="conn" class="badge">connecting…</span>
+    </header>
+
+    <div class="row">
+      <div class="card">
+        <h3>Thermals</h3>
+        <div class="kv">
+          <div>Temp 1</div><div id="temp1">—</div>
+          <div>Temp 2</div><div id="temp2">—</div>
+          <div>Fan RPM</div><div id="fanrpm">—</div>
+          <div>Target</div><div id="fantarget">—</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Control</h3>
+        <label>Mode</label>
+        <select id="mode">
+          <option value="pid">PID</option>
+          <option value="manual">Manual</option>
+        </select>
+        <label>Manual Fan %</label>
+        <input id="manpct" type="number" min="0" max="100" step="1" />
+        <label>Uploads Enabled</label>
+        <select id="upl">
+          <option value="true">Enabled</option>
+          <option value="false">Disabled</option>
+        </select>
+        <label>Upload Token (optional)</label>
+        <input id="utok" type="text" placeholder="Bearer token" />
+        <label>Setpoint 1 (°C)</label>
+        <input id="sp1" type="number" min="0" max="120" step="0.5" />
+        <label>Setpoint 2 (°C)</label>
+        <input id="sp2" type="number" min="0" max="120" step="0.5" />
+        <label>PID Gains (Kp Ki Kd)</label>
+        <div style="display:flex; gap:8px;">
+          <input id="kp" type="number" step="0.1" style="flex:1" />
+          <input id="ki" type="number" step="0.01" style="flex:1" />
+          <input id="kd" type="number" step="0.01" style="flex:1" />
+        </div>
+        <div style="margin-top:12px; display:flex; gap:8px;">
+          <button id="save">Save</button>
+          <button class="secondary" id="refresh">Refresh</button>
+        </div>
+      </div>
+      
+      <div class="card" style="flex:2;">
+        <h3>Status / Logs</h3>
+        <div style="display:flex; gap:8px; margin-bottom:8px;">
+          <button id="getlogs" class="secondary">Fetch Logs</button>
+          <button id="clearlog" class="secondary">Clear</button>
+        </div>
+        <pre id="log" style="height:200px; overflow:auto; background:#0e1520; border:1px solid #2a3a4f; padding:8px; border-radius:8px;">(empty)</pre>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+  </html>

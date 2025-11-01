@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BOOTBOX DSP Dev UI</title>
+  </head>
+  <body>
+    <h3>BOOTBOX DSP – Dev UI</h3>
+    <p>This directory mirrors the device UI. Build pipeline should copy artifacts into <code>firmware/arduino/bootbox_mcu_fw/data/</code> for LittleFS.</p>
+    <script>
+      // minimal dev WS poke
+      const ws = new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws');
+      ws.addEventListener('open',()=>ws.send(JSON.stringify({type:'get_state', id:1})));
+      ws.addEventListener('message', ev => console.log('msg', ev.data));
+    </script>
+  </body>
+  </html>
+

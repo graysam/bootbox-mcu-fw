@@ -61,3 +61,45 @@ Prompt: please check all is A-ok, confirming github access by setting up a new r
   - Pushed initial journal commit to confirm GitHub access end-to-end.
 - journal.txt
   - Extended log with repository setup details per prompt requirements.
+Prompt: Generate a file named AGENTS.md that serves as a contributor guide for this repository. Your goal is to produce a clear, concise, and well-structured document with descriptive headings and actionable explanations for each section. Follow the outline below, but adapt as needed — add sections if relevant, and omit those that do not apply to this project. Document Requirements: Title the document "Repository Guidelines". Use Markdown headings. Keep it concise (200–400 words). Provide examples and maintain a professional tone. Recommended Sections: Project Structure, Build/Test/Dev Commands, Coding Style, Testing, Commit & PR, and optional Security/Architecture/Agent Notes.
+- AGENTS.md
+  - Added concise contributor guide titled "Repository Guidelines" tailored to Arduino/ESP32 + web UI.
+  - Documented proposed directory layout for firmware (Arduino/IDF), web, tests, tools, and docs.
+  - Listed key commands for Arduino CLI, ESP-IDF, web dev, and optional PlatformIO.
+  - Specified coding style (C/C++ and JS/TS), naming patterns, and formatter expectations.
+  - Defined testing approach for firmware smoke tests and web unit tests with CI notes.
+  - Stated Conventional Commits usage and PR requirements for focused, well-documented changes.
+  - Added security/config tips (AP defaults, NVS, serial port) and agent-specific journaling rules.
+Prompt: please get started on laying out the project as i have described, starting with the .ino file. plan out the structure of the code, including coding methods you will use to achieve an efficient but well-polished result, with strong emphasis on the WS communications layer. carefully decide on candidate libraries which may be necessary for certain functionality or to improve the efficiency of the codebase, allowing the functionality to fit inside the constraints of the target platform, and allowing overhead for future additions. please work first on the web interface and websocket layer, then onto the persistent storage for variables and ADAU1701 images/parameters, then we will pursue the cooling management system as our first prototype deliverable. It is essential in the web interface we include usability considerations, as the finished system will be installed in a car with minimal accessibility for debugging.
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
+  - Created primary Arduino sketch with SoftAP setup (SSID BOOTBOXDSP), LittleFS, Preferences, and Async HTTP/WS server.
+  - Implemented JSON-based WebSocket protocol with simple reliable-send (id + ack + retry) and periodic state broadcast.
+  - Added REST endpoints: `/api/state` (read) and `/api/upload/adau` (binary upload to /dsp/) to stage ADAU images.
+  - Established modular Settings model persisted via NVS; stubbed state for temps/fan for future control loop work.
+- firmware/arduino/bootbox_mcu_fw/settings.h
+  - Defined Settings struct (pid enable, two setpoints, manual fan %) with load/save helpers using Preferences.
+  - Keeps configuration small and atomic to reduce wear and simplify updates.
+- firmware/arduino/bootbox_mcu_fw/data/index.html
+  - Added initial in-car-friendly UI shell with simple, high-contrast styling and key controls (mode, setpoints, manual %).
+  - Designed to be served from LittleFS; pairs with `/app.js` for WS-backed interactivity.
+- firmware/arduino/bootbox_mcu_fw/data/app.js
+  - Implemented resilient WebSocket client with exponential backoff, periodic ping, and basic ack/retry client-side.
+  - Provides state rendering and settings update messages (`set_settings`, `get_state`).
+- web/index.html
+  - Dev-facing mirror of the on-device UI entry point to aid local iteration.
+  - Notes that build artifacts should be copied into the sketch `data/` for device deployment.
+Prompt: please continue fleshing out the next steps you've suggested including the 'HTTP upload auth toggles and a simple status/log panel. ', implement the PID control loop, and sketch out a spec for the hardware connections. please create and start to maintain the GitHub readme.md and friendly documentation as work proceeds, including enough information to build a prototype with a standard ESP32 board and ADAU1701 module. be sure to commit and document all changes after each development cycle.
+- firmware/arduino/bootbox_mcu_fw/settings.h
+  - Extended settings with PID gains (Kp/Ki/Kd) and upload security toggles (enabled + bearer token), persisted via NVS.
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
+  - Added hardware pin map constants (PWM, tach, thermistors) and LEDC 25kHz PWM setup.
+  - Implemented basic PID loop (hot-sensor control, anti-windup) driving 0–100% fan target; manual mode honors user percentage.
+  - Added device log ring buffer with `/api/logs` and WS `get_logs` handler; logs upload start/finish and settings updates.
+  - Secured `/api/upload/adau` behind `uploads_enabled` and optional `Authorization: Bearer <token>` matching `upload_token`.
+  - Stubbed sensor reads (`adcToTempC` placeholder) and tach (TODO PCNT/RMT) to enable end-to-end flow now.
+- firmware/arduino/bootbox_mcu_fw/data/index.html
+  - Added controls for uploads toggle, optional token, PID gains (Kp/Ki/Kd), and a Status/Logs panel with fetch/clear.
+- firmware/arduino/bootbox_mcu_fw/data/app.js
+  - Wired new controls into `set_settings`; added `get_logs` WS action and UI rendering of logs.
+- README.md
+  - Created friendly documentation: build steps (arduino-cli), feature overview, endpoints, and prototype hardware pinout.
