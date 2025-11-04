@@ -12,8 +12,6 @@
     kp: document.getElementById('kp'),
     ki: document.getElementById('ki'),
     kd: document.getElementById('kd'),
-    upl: document.getElementById('upl'),
-    utok: document.getElementById('utok'),
     save: document.getElementById('save'),
     refresh: document.getElementById('refresh'),
     getlogs: document.getElementById('getlogs'),
@@ -82,7 +80,6 @@
     S.kp.value = d.kp ?? '';
     S.ki.value = d.ki ?? '';
     S.kd.value = d.kd ?? '';
-    S.upl.value = d.uploads_enabled ? 'true' : 'false';
   }
 
   S.save.onclick = () => {
@@ -94,9 +91,7 @@
       fan_manual_pct: parseInt(S.manpct.value || '0', 10),
       kp: parseFloat(S.kp.value),
       ki: parseFloat(S.ki.value),
-      kd: parseFloat(S.kd.value),
-      uploads_enabled: S.upl.value === 'true',
-      upload_token: S.utok.value || ''
+      kd: parseFloat(S.kd.value)
     };
     send('set_settings', data);
   };

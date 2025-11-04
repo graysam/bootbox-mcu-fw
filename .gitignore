@@ -1,0 +1,19 @@
+.arduino-build/
+.arduino-data/
+.arduino-downloads/
+.python-libs/
+arduino-cli.yaml
+.arduino-core-install.log
+
+# General build artifacts
+*.elf
+*.bin
+*.map
+
+# Node / web tooling
+node_modules/
+dist/
+
+# OS junk
+.DS_Store
+Thumbs.db

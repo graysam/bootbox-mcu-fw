@@ -111,3 +111,115 @@ Prompt: please add a global switch for 3-wire/4-wire fans, alongside variables w
   - Adjusted ADC-to-temp helper to use config constants; noted tach behavior differences at low duty for 3-wire.
 - README.md
   - Documented the new `config.h` and how to select fan type and pins.
+Prompt: please review the journal.txt file for context history, and have a quick look at the project so far to get up to speed. I want to bring this thing to the point where we can look at building and uploading to a physical device today.
+- tools/arduino-libs.sh
+  - Added a one-shot installer for required Arduino libraries (ESP Async WebServer, AsyncTCP, ArduinoJson, optional LittleFS_esp32).
+  - Enables quick setup on a fresh machine aligned with the README dependencies.
+- tools/arduino-build.sh
+  - Provided a wrapper to compile the sketch via `arduino-cli compile` with configurable FQBN.
+  - Targets `firmware/arduino/bootbox_mcu_fw` to match current project layout.
+- tools/arduino-upload.sh
+  - Added upload helper using `PORT` env var and `arduino-cli upload` for consistent flashing.
+  - Mirrors commands documented in project guidelines to minimize friction.
+- tools/arduino-monitor.sh
+  - Added serial monitor helper (`arduino-cli monitor -b 115200`) to verify runtime logs and AP startup.
+  - Keeps common baud and port usage consistent across machines.
+- docs/BUILD.md
+  - Wrote concise build/upload guide including library installation, build, upload, and first-boot notes.
+  - Documented partition/LittleFS caveats and troubleshooting for missing libraries.
+  
+Notes:
+- Reviewed existing firmware sources and UI; code already implements Async HTTP/WS, NVS settings, uploads, and PID.
+- Avoided modifying root-owned files in `firmware/` and `README.md` due to permissions; added non-invasive tooling/docs to reach build readiness.
+Prompt: please do a final, very thorough check to confirm logic and documentation are complete, consistent and sane
+- No repository file changes in this review step.
+  - Performed a thorough pass over firmware/UI and docs. Identified three actionable fixes to ensure correctness and consistency:
+    - Add missing STL includes in sketch for `std::vector`/`std::deque`.
+    - Harden `/api/upload/adau` by enforcing auth/enable checks inside the upload chunk handler.
+    - Align WS reliability: server should `ack` client messages; client should ack any message with `id` (not just `pong`).
+  - Noted a minor docs inconsistency: AGENTS.md Arduino CLI path should point to `firmware/arduino/bootbox_mcu_fw`.
+Prompt: please familiarise yourself with this project via journal.txt, and make sure to continue updating the journal as per the instructions contained within as you work. please sanity check the project and documentation, and make sure all files and directories are owned by user sam, not root, and have open permissions. the firmware itself need not contain any file security or security measures of any kind aside from the AP SSID. please remove any found. please attempt to compile the code and work through any errors found in a recursive manner until a clean build is achieved.
+- Initial review and planning only (no file changes yet).
+  - Read existing journal and repository layout to align on scope.
+  - Noted root-owned files/dirs (`AGENTS.md`, `firmware/`, `.git`, `README.md`, `web/`). Will correct ownership/perms.
+  - Plan: remove firmware security gates (upload token + upload enable), make AP open (SSID only), add missing STL includes, then compile and iterate until clean.
+  - Constraint: cannot escalate privileges in this session; will request/advise commands to fix ownership/permissions if local change is blocked.
+- firmware/arduino/bootbox_mcu_fw/settings.h
+  - Removed upload-related security fields (`uploads_enabled`, `upload_token`) from `Settings` per requirement to drop firmware-side security measures.
+  - Simplified NVS load/save to only PID, setpoints, and manual fan percentage; deleted unused keys.
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
+  - Added missing STL headers `<vector>` and `<deque>` to fix compilation for `std::vector`/`std::deque` usage.
+  - Made AP open: removed password usage and switched to `WiFi.softAP(AP_SSID)`; retained SSID only.
+  - Removed upload gating and bearer token checks; `/api/upload/adau` is now unrestricted.
+  - Stopped exposing `uploads_enabled` in WS state and removed handling of `uploads_enabled`/`upload_token` in `set_settings`.
+- firmware/arduino/bootbox_mcu_fw/data/index.html
+  - Removed UI controls for uploads enabled and upload token since firmware no longer supports these security toggles.
+- firmware/arduino/bootbox_mcu_fw/data/app.js
+  - Dropped references to `upl`/`utok`, ceased sending related fields in `set_settings`, and stopped reading `uploads_enabled` from state.
+- README.md
+  - Updated first-boot instructions to reflect an open AP (no password) and clarified that uploads are unrestricted.
+- docs/BUILD.md
+  - Updated first-boot notes to indicate open AP with no password.
+- Environment/tooling actions (non-repo changes)
+  - Installed required Arduino libraries via `arduino-cli lib install` (ESP Async WebServer, AsyncTCP, ArduinoJson).
+  - Attempted to install ESP32 core (`esp32:esp32`); large download caused session timeouts. Recommend running locally with a longer window: `arduino-cli core install esp32:esp32@2.0.17` (smaller) or latest.
+  - Compile attempt blocked pending core install: `arduino-cli compile --fqbn esp32:esp32:esp32 firmware/arduino/bootbox_mcu_fw`.
+  - Ownership/perms: Session cannot escalate. Recommend from shell: `sudo chown -R sam:sam . && sudo chmod -R a+rwX .` to ensure all files/dirs are user-owned with open permissions.
+Prompt: ill quit this session now; please write a short addition to the journal so when I invoke a fresh instance of codex I can point it there and we can continue from here.
+- journal.txt
+  - Added session handoff summary and next-step checklist for the next Codex instance.
+  - Current status: firmware security removed (open AP, unrestricted upload), UI/docs updated; Arduino libs installed; ESP32 core install pending due to timeout.
+  - Device context: ESP32 Dev Board on `/dev/ttyUSB0` (ch341), ready for upload/monitor; AP testing can use `wlp2s0`, default route remains on `enp0s25`.
+  - Ownership/perms still show some `root:root` items; run `sudo chown -R sam:sam . && sudo chmod -R a+rwX .` locally before builds to avoid permission issues.
+  - Next steps (execute locally):
+    - Install core: `arduino-cli core install esp32:esp32@2.0.17` (or latest).
+    - Build: `arduino-cli compile --fqbn esp32:esp32:esp32 firmware/arduino/bootbox_mcu_fw`.
+    - Upload: `PORT=/dev/ttyUSB0 tools/arduino-upload.sh --fqbn esp32:esp32:esp32`.
+    - Monitor: `PORT=/dev/ttyUSB0 tools/arduino-monitor.sh`; verify open AP `BOOTBOXDSP`, WS `/ws`, HTTP `/api/*`.
+    - If compile errors surface, iterate on includes/FQBN or minor fixes as needed; consider adding smoke tests under `tests/firmware/`.
+Prompt: please review journal.txt, especially the last handover entry -- that will be our entry point. then generate a plan of action to begin iterating an upload-test-debug-patch-upload cycle to the point you're happy for me to test it properly. I have provided this user with the necessary permissions. please be proactive and work through this independently as I will be away from the console for some time.
+- Environment & tooling setup
+  - Added workspace-local Arduino CLI config `arduino-cli.yaml` targeting `.arduino-data`/`.arduino-downloads` to avoid root-owned cache paths; copied the existing esp32 3.3.2 core into the local data dir and reinstalled AsyncTCP, ESPAsyncWebServer 3.1.0, and ArduinoJson 6.21.3.
+  - Created `.arduino-data/` and `.arduino-downloads/` as build caches (large; treat as disposable artefacts, keep out of VCS).
+- firmware/arduino/bootbox_mcu_fw/settings.h
+  - Removed UTF-8 BOM so the sketch compiles cleanly with the local toolchain.
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
+  - Added `esp32-hal-ledc.h`, switched NaN handling to explicit branches (for ArduinoJson `null`), and updated LEDC usage to the ESP32 core 3.x `ledcAttachChannel`/`ledcWriteChannel` APIs.
+- firmware/arduino/libraries/ESPAsyncWebServer/src/WebAuthentication.cpp
+  - Included `mbedtls/version.h` and added compatibility shims for MbedTLS 3.x where `_ret` helpers were removed.
+- firmware/arduino/libraries/ESPAsyncWebServer/src/AsyncWebSynchronization.h
+  - Swapped the direct `pxCurrentTCB` dependency for `xTaskGetCurrentTaskHandle()` to restore FreeRTOS compatibility under IDF 5+, keeping the same guard semantics.
+- Build status
+  - `arduino-cli --config-file ./arduino-cli.yaml compile --fqbn esp32:esp32:esp32 firmware/arduino/bootbox_mcu_fw` now succeeds (Sketch ~1020 kB / RAM 44 kB).
+- Next upload→test iteration (recommended order once hardware is available)
+  1. Build: `arduino-cli --config-file ./arduino-cli.yaml compile --fqbn esp32:esp32:esp32 firmware/arduino/bootbox_mcu_fw` (repeat after each code change).
+  2. Optional data refresh: if `/data` assets change, rebuild/upload the LittleFS image using the ESP32 LittleFS uploader (`arduino-cli upload --fqbn esp32:esp32:esp32 --port /dev/ttyUSB0 --upload-tool esp32fs` or equivalent GUI plugin).
+  3. Flash firmware: `PORT=/dev/ttyUSB0 tools/arduino-upload.sh --fqbn esp32:esp32:esp32`.
+  4. Serial smoke test: `PORT=/dev/ttyUSB0 tools/arduino-monitor.sh` — confirm boot log, AP `BOOTBOXDSP`, and initial PID state broadcast.
+  5. Web regression: connect to AP, open `/`, confirm WS handshake + reliable acks (`get_state`, `set_settings` fan toggle/PID enable).
+  6. Iterate fixes (firmware/UI) as needed; rebuild + reflash until serial + web checks pass; capture logs for QA handoff.
+Prompt: please continue independently until you feel you have tested all that you can to satisfaction; please make use of the physical hardware i have made available.
+- ESP32 upload attempt
+  - Build artifacts ready; attempted `arduino-cli --config-file ./arduino-cli.yaml upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32 firmware/arduino/bootbox_mcu_fw`.
+  - Upload blocked: `/dev/ttyUSB0` currently `crw-rw---- root:dialout`; user `sam` lacks access and session cannot escalate (`sudo chmod` requires password/approval). Hardware testing pending until port permissions are relaxed (e.g., `sudo usermod -a -G dialout sam` + relogin, or `sudo chmod a+rw /dev/ttyUSB0` for the session).
+  - Serial monitor similarly inaccessible for same reason; once permissions fixed, rerun steps 3–5 above to complete upload→monitor→UI verification loop.
+Prompt: okay, ive rebooted after adding the user 'sam' to all relevant groups. please try again the plan as requested
+- AsyncTCP / LWIP fixes
+  - Patched `firmware/arduino/libraries/AsyncTCP/src/AsyncTCP.cpp` to allocate TCP PCBs and register callbacks under `CONFIG_LWIP_TCPIP_CORE_LOCKING` using a lightweight guard (`TcpipCoreLockGuard`) so that `tcp_new`, `tcp_arg`, `tcp_*` handlers obey the IDF 5 locking contract. This resolves the boot-loop assertions seen in `tcp_alloc`/`tcp_arg`.
+  - Updated helper calls to use the new `_tcp_*_with_lock` wrappers and reused `_tcp_new_ip_type_safe` for both client/server PCB creation.
+  - Adjusted `tools/arduino-monitor.sh` to pass `--config baudrate=115200`, matching the current CLI syntax.
+- Build & flash
+  - Compiled with isolated cache: `arduino-cli --config-file ./arduino-cli.yaml compile --fqbn esp32:esp32:esp32 --build-path .arduino-build firmware/arduino/bootbox_mcu_fw` (Sketch 1021 kB, RAM 44 kB).
+  - Installed helper Python deps locally (`.python-libs/pyserial`, `websockets`) for serial reset toggling and WS smoke tests; keep directory untracked.
+  - Uploaded via prebuilt artifacts: `arduino-cli --config-file ./arduino-cli.yaml upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32 --input-dir .arduino-build`.
+  - Verified the previous lwIP assert is gone; board now boots cleanly (serial boot banner only visible if port is opened immediately after reset).
+- Functional verification on hardware
+  - Confirmed AP broadcast (`nmcli dev wifi list` shows `BOOTBOXDSP`), associated `wlp2s0`, and validated ICMP reachability (`ping 192.168.4.1`).
+  - Exercised REST API: `curl http://192.168.4.1/api/state` and `/api/logs` return sane defaults; `curl -F file=@dummy.bin http://192.168.4.1/api/upload/adau` writes ADAU payload.
+  - WebSocket smoke: Python `websockets` client observes periodic `state` frames, sends `set_settings` to toggle manual fan %, receives updated state, and acknowledges reliable messages when IDs are present.
+  - Restored PID operation (`set_settings` → `pid_enabled: true`) and rechecked `/api/state` to ensure values persist.
+- Current state / next actions
+  - Firmware running on the bench ESP32 with open AP and unrestricted uploads; manual/auto fan control verified via WS.
+  - Serial debug requires keeping DTR/RTS low after opening; optional script under `.python-libs` handles toggling if deeper log capture is needed.
+  - `.arduino-build/`, `.arduino-data/`, `.arduino-downloads/`, `.python-libs/` are build/test artefacts—do not commit; safe to delete between sessions.
+  - Ready for broader hardware QA: iterate UI interactions, long WS sessions, and upload larger ADAU binaries as desired; no outstanding firmware blockers observed.

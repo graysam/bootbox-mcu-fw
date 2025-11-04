@@ -5,13 +5,15 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
+#include <esp32-hal-ledc.h>
+#include <vector>
+#include <deque>
 
 #include "config.h"
 #include "settings.h"
 
 // ---- WiFi AP config ----
-static const char* AP_SSID = "BOOTBOXDSP";
-static const char* AP_PASS = "lollipop"; // WPA2-PSK
+static const char* AP_SSID = "BOOTBOXDSP"; // Open AP (SSID only)
 
 // ---- Web server and WebSocket ----
 AsyncWebServer server(80);
@@ -63,14 +65,21 @@ static void wsBroadcastState() {
   StaticJsonDocument<384> doc;
   doc["type"] = "state";
   auto data = doc.createNestedObject("data");
-  data["temp1"] = isnan(state.temp1) ? nullptr : state.temp1;
-  data["temp2"] = isnan(state.temp2) ? nullptr : state.temp2;
+  if (isnan(state.temp1)) {
+    data["temp1"] = nullptr;
+  } else {
+    data["temp1"] = state.temp1;
+  }
+  if (isnan(state.temp2)) {
+    data["temp2"] = nullptr;
+  } else {
+    data["temp2"] = state.temp2;
+  }
   data["fan_rpm"] = state.fan_rpm;
   data["fan_target_pct"] = state.fan_target_pct;
   data["pid_enabled"] = settings.pid_enabled;
   data["sp1"] = settings.setpoint1_c;
   data["sp2"] = settings.setpoint2_c;
-  data["uploads_enabled"] = settings.uploads_enabled;
   data["kp"] = settings.pid_kp;
   data["ki"] = settings.pid_ki;
   data["kd"] = settings.pid_kd;
@@ -159,11 +168,9 @@ static void onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
       if (data.containsKey("sp1")) settings.setpoint1_c = data["sp1"].as<float>();
       if (data.containsKey("sp2")) settings.setpoint2_c = data["sp2"].as<float>();
       if (data.containsKey("fan_manual_pct")) settings.fan_manual_pct = data["fan_manual_pct"].as<uint8_t>();
-      if (data.containsKey("uploads_enabled")) settings.uploads_enabled = data["uploads_enabled"].as<bool>();
       if (data.containsKey("kp")) settings.pid_kp = data["kp"].as<float>();
       if (data.containsKey("ki")) settings.pid_ki = data["ki"].as<float>();
       if (data.containsKey("kd")) settings.pid_kd = data["kd"].as<float>();
-      if (data.containsKey("upload_token")) settings.upload_token = data["upload_token"].as<const char*>();
       settingsSave(prefs, settings);
       addLog("settings updated");
       wsBroadcastState();
@@ -197,8 +204,16 @@ static void registerHttpRoutes() {
 
   server.on("/api/state", HTTP_GET, [](AsyncWebServerRequest* req){
     StaticJsonDocument<384> doc;
-    doc["temp1"] = isnan(state.temp1) ? nullptr : state.temp1;
-    doc["temp2"] = isnan(state.temp2) ? nullptr : state.temp2;
+    if (isnan(state.temp1)) {
+      doc["temp1"] = nullptr;
+    } else {
+      doc["temp1"] = state.temp1;
+    }
+    if (isnan(state.temp2)) {
+      doc["temp2"] = nullptr;
+    } else {
+      doc["temp2"] = state.temp2;
+    }
     doc["fan_rpm"] = state.fan_rpm;
     doc["fan_target_pct"] = state.fan_target_pct;
     doc["pid_enabled"] = settings.pid_enabled;
@@ -211,13 +226,7 @@ static void registerHttpRoutes() {
   // Upload ADAU1701 binary/images to /dsp directory in LittleFS
   server.on("/api/upload/adau", HTTP_POST,
             [](AsyncWebServerRequest* req){
-              if (!settings.uploads_enabled) { req->send(403, "text/plain", "uploads disabled"); return; }
-              if (settings.upload_token.length() > 0) {
-                if (!req->hasHeader("Authorization")) { req->send(401, "text/plain", "missing token"); return; }
-                auto* h = req->getHeader("Authorization");
-                String need = String("Bearer ") + settings.upload_token;
-                if (h->value() != need) { req->send(401, "text/plain", "bad token"); return; }
-              }
+              // Unrestricted upload endpoint (no token, always enabled)
               req->send(200, "text/plain", "ok");
             },
             [](AsyncWebServerRequest* req, String filename, size_t index, uint8_t* data, size_t len, bool final){
@@ -244,11 +253,11 @@ static void registerHttpRoutes() {
 // ---- Setup helpers ----
 static void initWiFiAP() {
   WiFi.mode(WIFI_AP);
-  bool ok = WiFi.softAP(AP_SSID, AP_PASS);
+  bool ok = WiFi.softAP(AP_SSID); // Open AP (no password)
   if (!ok) {
     // Retry once quickly
     delay(500);
-    WiFi.softAP(AP_SSID, AP_PASS);
+    WiFi.softAP(AP_SSID);
   }
 }
 
@@ -279,7 +288,7 @@ static void applyFanOutput(uint8_t pct) {
   // 3-wire fans: enforce a minimum start duty to avoid stall.
   if (kFanType == FanType::Fan3Wire && pct > 0 && pct < FAN3_MIN_START_PCT) pct = FAN3_MIN_START_PCT;
   uint32_t duty = map(pct, 0, 100, 0, (1 << FAN_PWM_RES_BITS) - 1);
-  ledcWrite(FAN_PWM_CHANNEL, duty);
+  ledcWriteChannel(FAN_PWM_CHANNEL, duty);
   // Tach handling note: at low duty on 3-wire, tach pulses may be intermittent.
 }
 
@@ -325,8 +334,7 @@ void setup() {
 
   // Fan PWM setup
   const int pwm_freq = (kFanType == FanType::Fan4Wire) ? FAN_PWM_FREQ_4WIRE : FAN_PWM_FREQ_3WIRE;
-  ledcSetup(FAN_PWM_CHANNEL, pwm_freq, FAN_PWM_RES_BITS);
-  ledcAttachPin(PIN_FAN_CTRL, FAN_PWM_CHANNEL);
+  ledcAttachChannel(PIN_FAN_CTRL, pwm_freq, FAN_PWM_RES_BITS, FAN_PWM_CHANNEL);
   applyFanOutput(settings.pid_enabled ? 20 : settings.fan_manual_pct);
 
   ws.onEvent(onWsEvent);

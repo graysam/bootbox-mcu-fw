@@ -7,15 +7,15 @@ Firmware for an ESP32-based system controller for a DIY car stereo using an ADAU
 - Build (Arduino CLI):
   - `arduino-cli compile --fqbn esp32:esp32:esp32 firmware/arduino/bootbox_mcu_fw`
   - `arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32 firmware/arduino/bootbox_mcu_fw`
-- First boot: ESP32 starts AP `BOOTBOXDSP` (pass `lollipop`). Open `http://192.168.4.1`.
+- First boot: ESP32 starts open AP `BOOTBOXDSP` (no password). Open `http://192.168.4.1`.
 - UI path: files under `firmware/arduino/bootbox_mcu_fw/data/` (served via LittleFS). Use Arduino ESP32 LittleFS data uploader to flash assets if needed.
 
 ## Features
 - WebSocket protocol `{type,id,data}` with app-level ack/retry, periodic `state` broadcast.
 - Simple settings storage (NVS/Preferences): PID enable, 2 setpoints, manual fan %, PID gains, upload toggles.
 - HTTP endpoints:
-  - `/api/state` (GET): current temps, RPM, target, settings (no secrets).
-  - `/api/upload/adau` (POST): upload ADAU images to `/dsp/` (guarded by settings).
+  - `/api/state` (GET): current temps, RPM, target, settings.
+  - `/api/upload/adau` (POST): upload ADAU images to `/dsp/` (unrestricted).
   - `/api/logs` (GET): device log ring buffer.
 
 ## Hardware Connections (prototype)
@@ -31,6 +31,5 @@ Firmware for an ESP32-based system controller for a DIY car stereo using an ADAU
 - ESPAsyncWebServer, AsyncTCP, ArduinoJson, LittleFS, Preferences (ESP32 core). Install via Boards Manager/Library Manager.
 
 ## Notes
-- Upload Security: toggle uploads and optional bearer token in the UI. Avoid leaving uploads enabled in production.
 - Tuning: adjust PID gains in UI. Setpoints default to 45/55°C. Replace `adcToTempC()` with your NTC curve.
 - Build-time config: edit `firmware/arduino/bootbox_mcu_fw/config.h` to set fan type, pins, and PWM parameters.
