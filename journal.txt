@@ -229,3 +229,9 @@ Prompt: Please update the build scripts to handle safely and programmatically fe
   - Added robust discovery for core-provided utilities (`mklittlefs`, `esptool`), supporting both Python-script and native binary variants shipped with ESP32 core 3.x.
   - Updated `tools/arduino-upload.sh` to consume the manifest and flash all segments (bootloader, partitions, app, LittleFS) in one `esptool` pass; defaults to rebuilding unless `--no-build` is specified.
   - Documented the new workflow in `docs/BUILD.md`; upload helper now keeps firmware + filesystem assets in sync by design.
+Prompt: can we please allow for two fans? both are side by side pushing air through the chassis so independent control is probably not super important, but i'd imagine we'd want them both on separate pins
+- Dual-fan support
+  - Expanded `config.h` to define two PWM outputs/channels (`PIN_FAN1_CTRL`=`25`, `PIN_FAN2_CTRL`=`26`) with opt-out via `-1`, and exposed shared arrays for iteration.
+  - Updated firmware (`bootbox_mcu_fw.ino`) to initialise/drive both fans in parallel, report the active fan count via WS/HTTP state, and log the number of fans found at boot.
+  - Enhanced the dashboard (`index.html`/`app.js`) to surface the fan count in the mode badge and keep UX messaging consistent after controller sync.
+  - Rebuilt + reflashed via the automated scripts (`tools/arduino-build.sh`, `tools/arduino-upload.sh --no-build`) and verified `/api/state` now reports `"fan_count": 2` with the refreshed UI served from LittleFS.

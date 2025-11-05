@@ -35,7 +35,8 @@
   const stateCache = {
     pidEnabled: true,
     manualPct: 30,
-    awaitingApply: false
+    awaitingApply: false,
+    fanCount: 1
   };
   let ws;
   let seq = 1;
@@ -168,7 +169,9 @@
     stateCache.pidEnabled = pidEnabled;
     S.modePid.classList.toggle('active', pidEnabled);
     S.modeManual.classList.toggle('active', !pidEnabled);
-    S.modeBadge.textContent = pidEnabled ? 'PID' : 'Manual';
+    const modeLabel = pidEnabled ? 'PID' : 'Manual';
+    const fansLabel = `${stateCache.fanCount} fan${stateCache.fanCount === 1 ? '' : 's'}`;
+    S.modeBadge.textContent = `${modeLabel} · ${fansLabel}`;
     S.manpct.disabled = pidEnabled;
     S.manpctValue.style.opacity = pidEnabled ? '0.5' : '1';
   }
@@ -184,6 +187,10 @@
     S.fanrpm.textContent = (d.fan_rpm ?? '—');
     const tgt = typeof d.fan_target_pct === 'number' ? clamp(d.fan_target_pct, 0, 100) : 0;
     S.fantarget.textContent = `${tgt}%`;
+
+    if (typeof d.fan_count === 'number' && d.fan_count > 0) {
+      stateCache.fanCount = Math.min(Math.max(Math.round(d.fan_count), 1), 4);
+    }
 
     const pidEnabled = !!d.pid_enabled;
     setModeUI(pidEnabled);

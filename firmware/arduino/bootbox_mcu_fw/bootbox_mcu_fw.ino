@@ -8,6 +8,7 @@
 #include <esp32-hal-ledc.h>
 #include <vector>
 #include <deque>
+#include <cstddef>
 
 #include "config.h"
 #include "settings.h"
@@ -30,6 +31,20 @@ struct RuntimeState {
 RuntimeState state;
 Settings settings;
 Preferences prefs;
+
+static constexpr size_t FAN_SLOT_COUNT = sizeof(FAN_CTRL_PINS) / sizeof(FAN_CTRL_PINS[0]);
+
+static inline bool fanSlotEnabled(size_t idx) {
+  return idx < FAN_SLOT_COUNT && FAN_CTRL_PINS[idx] >= 0 && FAN_PWM_CHANNELS[idx] >= 0;
+}
+
+static uint8_t activeFanCount() {
+  uint8_t count = 0;
+  for (size_t i = 0; i < FAN_SLOT_COUNT; ++i) {
+    if (fanSlotEnabled(i)) ++count;
+  }
+  return count;
+}
 
 // Reliable WS: basic ack tracking
 struct PendingMsg {
@@ -77,6 +92,7 @@ static void wsBroadcastState() {
   }
   data["fan_rpm"] = state.fan_rpm;
   data["fan_target_pct"] = state.fan_target_pct;
+  data["fan_count"] = activeFanCount();
   data["pid_enabled"] = settings.pid_enabled;
   data["sp1"] = settings.setpoint1_c;
   data["sp2"] = settings.setpoint2_c;
@@ -216,6 +232,7 @@ static void registerHttpRoutes() {
     }
     doc["fan_rpm"] = state.fan_rpm;
     doc["fan_target_pct"] = state.fan_target_pct;
+    doc["fan_count"] = activeFanCount();
     doc["pid_enabled"] = settings.pid_enabled;
     doc["sp1"] = settings.setpoint1_c;
     doc["sp2"] = settings.setpoint2_c;
@@ -288,7 +305,10 @@ static void applyFanOutput(uint8_t pct) {
   // 3-wire fans: enforce a minimum start duty to avoid stall.
   if (kFanType == FanType::Fan3Wire && pct > 0 && pct < FAN3_MIN_START_PCT) pct = FAN3_MIN_START_PCT;
   uint32_t duty = map(pct, 0, 100, 0, (1 << FAN_PWM_RES_BITS) - 1);
-  ledcWriteChannel(FAN_PWM_CHANNEL, duty);
+  for (size_t i = 0; i < FAN_SLOT_COUNT; ++i) {
+    if (!fanSlotEnabled(i)) continue;
+    ledcWriteChannel(FAN_PWM_CHANNELS[i], duty);
+  }
   // Tach handling note: at low duty on 3-wire, tach pulses may be intermittent.
 }
 
@@ -334,7 +354,10 @@ void setup() {
 
   // Fan PWM setup
   const int pwm_freq = (kFanType == FanType::Fan4Wire) ? FAN_PWM_FREQ_4WIRE : FAN_PWM_FREQ_3WIRE;
-  ledcAttachChannel(PIN_FAN_CTRL, pwm_freq, FAN_PWM_RES_BITS, FAN_PWM_CHANNEL);
+  for (size_t i = 0; i < FAN_SLOT_COUNT; ++i) {
+    if (!fanSlotEnabled(i)) continue;
+    ledcAttachChannel(FAN_CTRL_PINS[i], pwm_freq, FAN_PWM_RES_BITS, FAN_PWM_CHANNELS[i]);
+  }
   applyFanOutput(settings.pid_enabled ? 20 : settings.fan_manual_pct);
 
   ws.onEvent(onWsEvent);
@@ -342,6 +365,7 @@ void setup() {
   registerHttpRoutes();
   server.begin();
   Serial.print("AP IP: "); Serial.println(WiFi.softAPIP());
+  addLog(String("fans active: ") + activeFanCount());
   addLog("system boot");
 }
 
