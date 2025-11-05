@@ -31,7 +31,12 @@
     uploadInput: $('upload-input'),
     uploadStatus: $('upload-status'),
     toastStack: $('toast-stack'),
-    crossLink: $('cross-link')
+    crossLink: $('cross-link'),
+    liveSp1: $('live-sp1'),
+    liveSp2: $('live-sp2'),
+    liveKp: $('live-kp'),
+    liveKi: $('live-ki'),
+    liveKd: $('live-kd')
   };
 
   const stateCache = {
@@ -57,6 +62,43 @@
   };
 
   const dspControls = {};
+  const thermalFields = {
+    sp1: {
+      el: S.sp1,
+      live: S.liveSp1,
+      format: (v) => `${v.toFixed(1)} °C`,
+      toInput: (v) => v.toFixed(1),
+      epsilon: 0.05
+    },
+    sp2: {
+      el: S.sp2,
+      live: S.liveSp2,
+      format: (v) => `${v.toFixed(1)} °C`,
+      toInput: (v) => v.toFixed(1),
+      epsilon: 0.05
+    },
+    kp: {
+      el: S.kp,
+      live: S.liveKp,
+      format: (v) => v.toFixed(2),
+      toInput: (v) => v.toFixed(2),
+      epsilon: 0.01
+    },
+    ki: {
+      el: S.ki,
+      live: S.liveKi,
+      format: (v) => v.toFixed(3),
+      toInput: (v) => v.toFixed(3),
+      epsilon: 0.002
+    },
+    kd: {
+      el: S.kd,
+      live: S.liveKd,
+      format: (v) => v.toFixed(3),
+      toInput: (v) => v.toFixed(3),
+      epsilon: 0.002
+    }
+  };
   let ws;
   let seq = 1;
   const pending = new Map();
@@ -135,6 +177,37 @@
     S.modeBadge.textContent = `${modeLabel} · ${fansLabel}`;
     S.manpct.disabled = pidEnabled;
     S.manpctValue.style.opacity = pidEnabled ? '0.5' : '1';
+  }
+
+  function updateThermalField(key, value) {
+    const field = thermalFields[key];
+    if (!field || !Number.isFinite(value)) return;
+    const { el, live, toInput, format, epsilon = 0.05 } = field;
+    field.applied = value;
+    el.dataset.applied = value;
+    const dirty = el.dataset.dirty === 'true';
+    if (!dirty) {
+      el.value = toInput(value);
+    } else {
+      const current = Number.parseFloat(el.value);
+      if (Number.isFinite(current) && Math.abs(current - value) <= epsilon) {
+        el.dataset.dirty = '';
+        el.value = toInput(value);
+      }
+    }
+    const isDirty = el.dataset.dirty === 'true';
+    if (isDirty) {
+      const pendingVal = Number.parseFloat(el.value);
+      if (Number.isFinite(pendingVal)) {
+        live.textContent = `Pending: ${format(pendingVal)}`;
+      } else {
+        live.textContent = 'Pending…';
+      }
+      live.classList.add('pending');
+    } else {
+      live.textContent = `Applied: ${format(value)}`;
+      live.classList.remove('pending');
+    }
   }
 
   function updateManualSlider(val) {
@@ -427,11 +500,11 @@
     }
     updateManualSlider(stateCache.manualPct);
 
-    if (typeof core.sp1 === 'number') S.sp1.value = core.sp1;
-    if (typeof core.sp2 === 'number') S.sp2.value = core.sp2;
-    if (typeof core.kp === 'number') S.kp.value = core.kp;
-    if (typeof core.ki === 'number') S.ki.value = core.ki;
-    if (typeof core.kd === 'number') S.kd.value = core.kd;
+    if (typeof core.sp1 === 'number') updateThermalField('sp1', core.sp1);
+    if (typeof core.sp2 === 'number') updateThermalField('sp2', core.sp2);
+    if (typeof core.kp === 'number') updateThermalField('kp', core.kp);
+    if (typeof core.ki === 'number') updateThermalField('ki', core.ki);
+    if (typeof core.kd === 'number') updateThermalField('kd', core.kd);
 
     if (stateCache.awaitingApply) {
       setFormStatus('Settings applied by controller', 'success');
@@ -545,6 +618,29 @@
   window.addEventListener('beforeunload', flushDspUpdates);
 
   initDspControls();
+  Object.entries(thermalFields).forEach(([key, field]) => {
+    if (!field.el || !field.live) return;
+    field.el.addEventListener('input', () => {
+      field.el.dataset.dirty = 'true';
+      const val = Number.parseFloat(field.el.value);
+      if (Number.isFinite(val)) {
+        field.live.textContent = `Pending: ${field.format(val)}`;
+      } else {
+        field.live.textContent = 'Pending…';
+      }
+      field.live.classList.add('pending');
+    });
+    field.el.addEventListener('blur', () => {
+      if (field.el.dataset.dirty !== 'true') return;
+      const current = Number.parseFloat(field.el.value);
+      if (!Number.isFinite(current) && Number.isFinite(field.applied)) {
+        field.el.dataset.dirty = '';
+        field.el.value = field.toInput(field.applied);
+        field.live.textContent = `Applied: ${field.format(field.applied)}`;
+        field.live.classList.remove('pending');
+      }
+    });
+  });
   setConnection('connecting…', 'pending');
   updateManualSlider(stateCache.manualPct);
   connectWS();

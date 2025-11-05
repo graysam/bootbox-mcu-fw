@@ -241,4 +241,4 @@ Prompt: great! lets now start work on implementing the ADAU1701 features, beginn
   - WebSocket/HTTP state now advertises a `dsp` payload; new `set_dsp` handler clamps inputs, maintains crossover linkage, schedules persistence, and logs updates.
   - Rebuilt the dashboard with live knobs, sliders, and vertical faders driven by a reusable JS control layer. Displays are editable for precise entry, updates are throttled but stay responsive, and the fan badge reflects active fan count + mode.
   - Added crossover link toggle and sub-band range enforcement on both firmware and UI, plus batched WebSocket updates for smooth "analog" interaction.
-  - Follow-up tweaks: DSP card expands full-width on wide viewports, knob drag now disables transition during interaction, and redundant state echoes are ignored to prevent the "snap back" visual glitch on release.
+  - Follow-up tweaks: DSP card expands full-width on wide viewports, knob drag now disables transition during interaction, and redundant state echoes are ignored to prevent the "snap back" visual glitch on release. Thermal inputs now show applied vs pending values so edits no longer revert prior to saving.
