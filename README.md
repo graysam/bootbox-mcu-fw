@@ -15,6 +15,7 @@ Firmware for an ESP32-based system controller for a DIY car stereo using an ADAU
 ## Features
 - WebSocket protocol `{type,id,data}` with app-level ack/retry, periodic `state` broadcast.
 - Simple settings storage (NVS/Preferences): PID enable, 2 setpoints, manual fan %, PID gains, upload toggles.
+- DSP preview workspace with live knobs/faders for master/stereo/sub gains and crossover points (values persisted in NVS; wiring to ADAU1701 to follow).
 - HTTP endpoints:
   - `/api/state` (GET): current temps, RPM, target, settings.
   - `/api/upload/adau` (POST): upload ADAU images to `/dsp/` (unrestricted).

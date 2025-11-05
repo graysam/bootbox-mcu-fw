@@ -9,6 +9,7 @@
 #include <vector>
 #include <deque>
 #include <cstddef>
+#include <cmath>
 
 #include "config.h"
 #include "settings.h"
@@ -33,6 +34,9 @@ Settings settings;
 Preferences prefs;
 
 static constexpr size_t FAN_SLOT_COUNT = sizeof(FAN_CTRL_PINS) / sizeof(FAN_CTRL_PINS[0]);
+static bool settings_dirty = false;
+static uint32_t settings_dirty_since = 0;
+static constexpr uint32_t SETTINGS_SAVE_DELAY_MS = 1500;
 
 static inline bool fanSlotEnabled(size_t idx) {
   return idx < FAN_SLOT_COUNT && FAN_CTRL_PINS[idx] >= 0 && FAN_PWM_CHANNELS[idx] >= 0;
@@ -45,6 +49,19 @@ static uint8_t activeFanCount() {
   }
   return count;
 }
+
+static inline float clampf(float value, float min_v, float max_v) {
+  if (value < min_v) return min_v;
+  if (value > max_v) return max_v;
+  return value;
+}
+
+static inline void markSettingsDirty() {
+  settings_dirty = true;
+  settings_dirty_since = millis();
+}
+
+static bool handleDspUpdate(JsonObject data);
 
 // Reliable WS: basic ack tracking
 struct PendingMsg {
@@ -77,7 +94,7 @@ static void wsSendReliable(AsyncWebSocketClient* c, JsonDocument& doc) {
 }
 
 static void wsBroadcastState() {
-  StaticJsonDocument<384> doc;
+  StaticJsonDocument<768> doc;
   doc["type"] = "state";
   auto data = doc.createNestedObject("data");
   if (isnan(state.temp1)) {
@@ -99,6 +116,19 @@ static void wsBroadcastState() {
   data["kp"] = settings.pid_kp;
   data["ki"] = settings.pid_ki;
   data["kd"] = settings.pid_kd;
+
+  auto dsp = doc.createNestedObject("dsp");
+  dsp["master_db"] = settings.dsp_master_db;
+  dsp["stereo_db"] = settings.dsp_stereo_db;
+  dsp["sub_lo_db"] = settings.dsp_sub_lo_db;
+  dsp["sub_hi_db"] = settings.dsp_sub_hi_db;
+  dsp["cross_mains_hz"] = settings.dsp_cross_mains_hz;
+  dsp["cross_sub_hz"] = settings.dsp_cross_sub_hz;
+  dsp["cross_linked"] = settings.dsp_cross_linked;
+  dsp["sub_lo_hp_hz"] = settings.dsp_sub_lo_hp_hz;
+  dsp["sub_lo_lp_hz"] = settings.dsp_sub_lo_lp_hz;
+  dsp["sub_hi_hp_hz"] = settings.dsp_sub_hi_hp_hz;
+  dsp["sub_hi_lp_hz"] = settings.dsp_sub_hi_lp_hz;
 
   String out;
   serializeJson(doc, out);
@@ -187,9 +217,21 @@ static void onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
       if (data.containsKey("kp")) settings.pid_kp = data["kp"].as<float>();
       if (data.containsKey("ki")) settings.pid_ki = data["ki"].as<float>();
       if (data.containsKey("kd")) settings.pid_kd = data["kd"].as<float>();
-      settingsSave(prefs, settings);
-      addLog("settings updated");
+      markSettingsDirty();
+      addLog("thermal settings updated");
       wsBroadcastState();
+      return;
+    }
+
+    if (strcmp(mtype, "set_dsp") == 0) {
+      JsonObject data = doc["data"];
+      bool changed = false;
+      if (!data.isNull()) changed = handleDspUpdate(data);
+      if (changed) {
+        markSettingsDirty();
+        addLog("dsp params updated");
+        wsBroadcastState();
+      }
       return;
     }
 
@@ -219,7 +261,7 @@ static void registerHttpRoutes() {
   server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
 
   server.on("/api/state", HTTP_GET, [](AsyncWebServerRequest* req){
-    StaticJsonDocument<384> doc;
+    StaticJsonDocument<768> doc;
     if (isnan(state.temp1)) {
       doc["temp1"] = nullptr;
     } else {
@@ -236,6 +278,18 @@ static void registerHttpRoutes() {
     doc["pid_enabled"] = settings.pid_enabled;
     doc["sp1"] = settings.setpoint1_c;
     doc["sp2"] = settings.setpoint2_c;
+    auto dsp = doc.createNestedObject("dsp");
+    dsp["master_db"] = settings.dsp_master_db;
+    dsp["stereo_db"] = settings.dsp_stereo_db;
+    dsp["sub_lo_db"] = settings.dsp_sub_lo_db;
+    dsp["sub_hi_db"] = settings.dsp_sub_hi_db;
+    dsp["cross_mains_hz"] = settings.dsp_cross_mains_hz;
+    dsp["cross_sub_hz"] = settings.dsp_cross_sub_hz;
+    dsp["cross_linked"] = settings.dsp_cross_linked;
+    dsp["sub_lo_hp_hz"] = settings.dsp_sub_lo_hp_hz;
+    dsp["sub_lo_lp_hz"] = settings.dsp_sub_lo_lp_hz;
+    dsp["sub_hi_hp_hz"] = settings.dsp_sub_hi_hp_hz;
+    dsp["sub_hi_lp_hz"] = settings.dsp_sub_hi_lp_hz;
     String out; serializeJson(doc, out);
     req->send(200, "application/json", out);
   });
@@ -292,6 +346,98 @@ static void sampleSensors() {
   state.temp1 = adcToTempC(a1);
   state.temp2 = adcToTempC(a2);
   // TODO: tach read via PCNT or RMT; set to 0 for now
+}
+
+static bool handleDspUpdate(JsonObject data) {
+  bool changed = false;
+
+  auto updateDb = [&](const char* key, float& target) {
+    if (!data.containsKey(key)) return;
+    float v = data[key].as<float>();
+    if (isnan(v)) return;
+    float clamped = clampf(v, -60.0f, 12.0f);
+    if (fabsf(target - clamped) > 0.0001f) {
+      target = clamped;
+      changed = true;
+    }
+  };
+
+  auto updateRange = [&](const char* key, float& target, float min_v, float max_v) {
+    if (!data.containsKey(key)) return;
+    float v = data[key].as<float>();
+    if (isnan(v)) return;
+    float clamped = clampf(v, min_v, max_v);
+    if (fabsf(target - clamped) > 0.0001f) {
+      target = clamped;
+      changed = true;
+    }
+  };
+
+  updateDb("master_db", settings.dsp_master_db);
+  updateDb("stereo_db", settings.dsp_stereo_db);
+  updateDb("sub_lo_db", settings.dsp_sub_lo_db);
+  updateDb("sub_hi_db", settings.dsp_sub_hi_db);
+
+  updateRange("sub_lo_hp_hz", settings.dsp_sub_lo_hp_hz, 15.0f, 180.0f);
+  updateRange("sub_lo_lp_hz", settings.dsp_sub_lo_lp_hz, 30.0f, 220.0f);
+  updateRange("sub_hi_hp_hz", settings.dsp_sub_hi_hp_hz, 40.0f, 240.0f);
+  updateRange("sub_hi_lp_hz", settings.dsp_sub_hi_lp_hz, 60.0f, 260.0f);
+
+  if (data.containsKey("cross_linked")) {
+    bool v = data["cross_linked"].as<bool>();
+    if (settings.dsp_cross_linked != v) {
+      settings.dsp_cross_linked = v;
+      changed = true;
+    }
+  }
+
+  if (data.containsKey("cross_mains_hz")) {
+    float v = data["cross_mains_hz"].as<float>();
+    if (!isnan(v)) {
+      float clamped = clampf(v, 40.0f, 300.0f);
+      if (fabsf(settings.dsp_cross_mains_hz - clamped) > 0.0001f) {
+        settings.dsp_cross_mains_hz = clamped;
+        changed = true;
+      }
+      if (settings.dsp_cross_linked) {
+        settings.dsp_cross_sub_hz = settings.dsp_cross_mains_hz;
+      }
+    }
+  }
+
+  if (data.containsKey("cross_sub_hz")) {
+    float v = data["cross_sub_hz"].as<float>();
+    if (!isnan(v)) {
+      float clamped = clampf(v, 30.0f, 240.0f);
+      if (fabsf(settings.dsp_cross_sub_hz - clamped) > 0.0001f) {
+        settings.dsp_cross_sub_hz = clamped;
+        changed = true;
+      }
+      if (settings.dsp_cross_linked) {
+        settings.dsp_cross_mains_hz = settings.dsp_cross_sub_hz;
+      }
+    }
+  }
+
+  // Normalise linked crossover values if needed
+  if (settings.dsp_cross_linked) {
+    float linked = clampf(settings.dsp_cross_mains_hz, 40.0f, 240.0f);
+    settings.dsp_cross_mains_hz = linked;
+    settings.dsp_cross_sub_hz = linked;
+  } else {
+    settings.dsp_cross_mains_hz = clampf(settings.dsp_cross_mains_hz, 40.0f, 300.0f);
+    settings.dsp_cross_sub_hz = clampf(settings.dsp_cross_sub_hz, 30.0f, 240.0f);
+  }
+
+  auto enforceRange = [&](float& hp, float& lp, float min_hp, float max_lp) {
+    hp = clampf(hp, min_hp, max_lp - 5.0f);
+    lp = clampf(lp, hp + 5.0f, max_lp);
+  };
+
+  enforceRange(settings.dsp_sub_lo_hp_hz, settings.dsp_sub_lo_lp_hz, 15.0f, 220.0f);
+  enforceRange(settings.dsp_sub_hi_hp_hz, settings.dsp_sub_hi_lp_hz, 40.0f, 260.0f);
+
+  return changed;
 }
 
 // PID controller state
@@ -370,6 +516,11 @@ void setup() {
 }
 
 void loop() {
+  if (settings_dirty && millis() - settings_dirty_since > SETTINGS_SAVE_DELAY_MS) {
+    settings_dirty = false;
+    settingsSave(prefs, settings);
+    addLog("settings persisted");
+  }
   // Handle reliable WS retransmission
   wsResendTick();
   // Sample sensors and control

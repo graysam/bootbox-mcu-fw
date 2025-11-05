@@ -10,6 +10,19 @@ struct Settings {
   float pid_kp = 4.0f;
   float pid_ki = 0.1f;
   float pid_kd = 0.0f;
+
+  // DSP controls (placeholder for ADAU1701 parameter mapping)
+  float dsp_master_db = -6.0f;
+  float dsp_stereo_db = 0.0f;
+  float dsp_sub_lo_db = 0.0f;
+  float dsp_sub_hi_db = 0.0f;
+  float dsp_cross_mains_hz = 120.0f;
+  float dsp_cross_sub_hz = 80.0f;
+  bool dsp_cross_linked = true;
+  float dsp_sub_lo_hp_hz = 25.0f;
+  float dsp_sub_lo_lp_hz = 80.0f;
+  float dsp_sub_hi_hp_hz = 70.0f;
+  float dsp_sub_hi_lp_hz = 160.0f;
 };
 
 inline void settingsLoad(Preferences& prefs, Settings& s) {
@@ -20,6 +33,18 @@ inline void settingsLoad(Preferences& prefs, Settings& s) {
   s.pid_kp = prefs.getFloat("kp", s.pid_kp);
   s.pid_ki = prefs.getFloat("ki", s.pid_ki);
   s.pid_kd = prefs.getFloat("kd", s.pid_kd);
+
+  s.dsp_master_db = prefs.getFloat("dspM", s.dsp_master_db);
+  s.dsp_stereo_db = prefs.getFloat("dspS", s.dsp_stereo_db);
+  s.dsp_sub_lo_db = prefs.getFloat("dspL", s.dsp_sub_lo_db);
+  s.dsp_sub_hi_db = prefs.getFloat("dspH", s.dsp_sub_hi_db);
+  s.dsp_cross_mains_hz = prefs.getFloat("dspXm", s.dsp_cross_mains_hz);
+  s.dsp_cross_sub_hz = prefs.getFloat("dspXs", s.dsp_cross_sub_hz);
+  s.dsp_cross_linked = prefs.getBool("dspXL", s.dsp_cross_linked);
+  s.dsp_sub_lo_hp_hz = prefs.getFloat("dspLH", s.dsp_sub_lo_hp_hz);
+  s.dsp_sub_lo_lp_hz = prefs.getFloat("dspLL", s.dsp_sub_lo_lp_hz);
+  s.dsp_sub_hi_hp_hz = prefs.getFloat("dspHH", s.dsp_sub_hi_hp_hz);
+  s.dsp_sub_hi_lp_hz = prefs.getFloat("dspHL", s.dsp_sub_hi_lp_hz);
 }
 
 inline void settingsSave(Preferences& prefs, const Settings& s) {
@@ -30,4 +55,16 @@ inline void settingsSave(Preferences& prefs, const Settings& s) {
   prefs.putFloat("kp", s.pid_kp);
   prefs.putFloat("ki", s.pid_ki);
   prefs.putFloat("kd", s.pid_kd);
+
+  prefs.putFloat("dspM", s.dsp_master_db);
+  prefs.putFloat("dspS", s.dsp_stereo_db);
+  prefs.putFloat("dspL", s.dsp_sub_lo_db);
+  prefs.putFloat("dspH", s.dsp_sub_hi_db);
+  prefs.putFloat("dspXm", s.dsp_cross_mains_hz);
+  prefs.putFloat("dspXs", s.dsp_cross_sub_hz);
+  prefs.putBool("dspXL", s.dsp_cross_linked);
+  prefs.putFloat("dspLH", s.dsp_sub_lo_hp_hz);
+  prefs.putFloat("dspLL", s.dsp_sub_lo_lp_hz);
+  prefs.putFloat("dspHH", s.dsp_sub_hi_hp_hz);
+  prefs.putFloat("dspHL", s.dsp_sub_hi_lp_hz);
 }

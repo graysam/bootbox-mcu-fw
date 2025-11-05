@@ -235,3 +235,9 @@ Prompt: can we please allow for two fans? both are side by side pushing air thro
   - Updated firmware (`bootbox_mcu_fw.ino`) to initialise/drive both fans in parallel, report the active fan count via WS/HTTP state, and log the number of fans found at boot.
   - Enhanced the dashboard (`index.html`/`app.js`) to surface the fan count in the mode badge and keep UX messaging consistent after controller sync.
   - Rebuilt + reflashed via the automated scripts (`tools/arduino-build.sh`, `tools/arduino-upload.sh --no-build`) and verified `/api/state` now reports `"fan_count": 2` with the refreshed UI served from LittleFS.
+Prompt: great! lets now start work on implementing the ADAU1701 features, beginning with a modular framework for updating and reading parameters via knob, slider, vertical 'fader',  etc. type elements with a 'display' reflecting the value above. the 'display' can be clicked on and typed into to set precise values. I want to maintain the live, responsive nature of the project such that turning a knob on the ui 'feels like' turning a real knob in an analog system. ...
+- DSP control scaffold
+  - Extended `Settings`/NVS persistence with ADAU1701 placeholder parameters (master/stereo/sub gains, crossover pair, per-band HP/LP) and added a deferred NVS flush to reduce flash churn.
+  - WebSocket/HTTP state now advertises a `dsp` payload; new `set_dsp` handler clamps inputs, maintains crossover linkage, schedules persistence, and logs updates.
+  - Rebuilt the dashboard with live knobs, sliders, and vertical faders driven by a reusable JS control layer. Displays are editable for precise entry, updates are throttled but stay responsive, and the fan badge reflects active fan count + mode.
+  - Added crossover link toggle and sub-band range enforcement on both firmware and UI, plus batched WebSocket updates for smooth "analog" interaction.
