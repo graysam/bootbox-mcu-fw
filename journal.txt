@@ -223,3 +223,9 @@ Prompt: okay, ive rebooted after adding the user 'sam' to all relevant groups. p
   - Serial debug requires keeping DTR/RTS low after opening; optional script under `.python-libs` handles toggling if deeper log capture is needed.
   - `.arduino-build/`, `.arduino-data/`, `.arduino-downloads/`, `.python-libs/` are build/test artefacts—do not commit; safe to delete between sessions.
   - Ready for broader hardware QA: iterate UI interactions, long WS sessions, and upload larger ADAU binaries as desired; no outstanding firmware blockers observed.
+Prompt: Please update the build scripts to handle safely and programmatically fetching the contents of the requisite directory, calculating and confirming offsets and formatting the files as necessary so populating the spiffs partition on the ESP32 is completed alongside the firmware build + burn. perhaps the script can build the firmware file, then create the spiffs image and consolidate them into a complete unified image?
+- Tooling overhaul
+  - Reworked `tools/arduino-build.sh` to compile into `.arduino-build/`, parse `sdkconfig`/`partitions.csv`, pack the LittleFS payload automatically (sized to the active `spiffs` partition), and emit a `flash-manifest.json` plus a merged `.unified.bin`.
+  - Added robust discovery for core-provided utilities (`mklittlefs`, `esptool`), supporting both Python-script and native binary variants shipped with ESP32 core 3.x.
+  - Updated `tools/arduino-upload.sh` to consume the manifest and flash all segments (bootloader, partitions, app, LittleFS) in one `esptool` pass; defaults to rebuilding unless `--no-build` is specified.
+  - Documented the new workflow in `docs/BUILD.md`; upload helper now keeps firmware + filesystem assets in sync by design.

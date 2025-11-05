@@ -4,11 +4,13 @@ Firmware for an ESP32-based system controller for a DIY car stereo using an ADAU
 
 ## Quick Start
 - Board: ESP32 DevKitC / NodeMCU-32S (default pins in sketch)
-- Build (Arduino CLI):
-  - `arduino-cli compile --fqbn esp32:esp32:esp32 firmware/arduino/bootbox_mcu_fw`
-  - `arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32 firmware/arduino/bootbox_mcu_fw`
+- Build + package (Arduino CLI):
+  - `ARDUINO_CLI_CONFIG=./arduino-cli.yaml tools/arduino-build.sh --fqbn esp32:esp32:esp32`
+- Upload firmware **and** LittleFS:
+  - `PORT=/dev/ttyUSB0 ARDUINO_CLI_CONFIG=./arduino-cli.yaml tools/arduino-upload.sh --fqbn esp32:esp32:esp32`
+- Optional serial monitor: `PORT=/dev/ttyUSB0 tools/arduino-monitor.sh`
 - First boot: ESP32 starts open AP `BOOTBOXDSP` (no password). Open `http://192.168.4.1`.
-- UI path: files under `firmware/arduino/bootbox_mcu_fw/data/` (served via LittleFS). Use Arduino ESP32 LittleFS data uploader to flash assets if needed.
+- UI assets live in `firmware/arduino/bootbox_mcu_fw/data/`; the build script repacks them into the LittleFS image automatically.
 
 ## Features
 - WebSocket protocol `{type,id,data}` with app-level ack/retry, periodic `state` broadcast.

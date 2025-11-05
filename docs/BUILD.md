@@ -20,19 +20,31 @@ Installs:
 - ArduinoJson
 - LittleFS_esp32 (only needed for older ESP32 cores; 3.x has LittleFS built-in)
 
-## Build
+## Build + Package
 
 ```
-tools/arduino-build.sh --fqbn esp32:esp32:esp32
+ARDUINO_CLI_CONFIG=./arduino-cli.yaml tools/arduino-build.sh \
+  --fqbn esp32:esp32:esp32 \
+  --build-path .arduino-build
 ```
 
-## Upload
+This will:
+- Compile the sketch with Arduino CLI.
+- Read the active partition table to size the LittleFS image automatically.
+- Generate `flash-manifest.json` describing all flash segments.
+- Produce `.unified.bin` (bootloader + app + LittleFS) for convenience.
+
+## Upload (firmware + LittleFS)
 
 ```
-PORT=/dev/ttyUSB0 tools/arduino-upload.sh --fqbn esp32:esp32:esp32
+PORT=/dev/ttyUSB0 ARDUINO_CLI_CONFIG=./arduino-cli.yaml tools/arduino-upload.sh \
+  --fqbn esp32:esp32:esp32 \
+  --build-path .arduino-build
 ```
 
-Then open the serial monitor to watch logs:
+`arduino-upload.sh` rebuilds by default; add `--no-build` to reuse existing artifacts. The script flashes every segment listed in `flash-manifest.json`, so the web UI is always deployed alongside the firmware.
+
+## Serial Monitor (optional)
 
 ```
 PORT=/dev/ttyUSB0 tools/arduino-monitor.sh
