@@ -163,12 +163,16 @@
     if (fromState && ctrl.active) {
       return;
     }
-    const meta = DSP_META[param];
-    const min = ctrl.min ?? meta?.min ?? -100;
-    const max = ctrl.max ?? meta?.max ?? 100;
-    const step = ctrl.step ?? meta?.step ?? 0.1;
+    const meta = DSP_META[param] || {};
+    const min = ctrl.min ?? meta.min ?? -100;
+    const max = ctrl.max ?? meta.max ?? 100;
+    const step = ctrl.step ?? meta.step ?? 0.1;
+    const prev = ctrl.value;
     let clamped = clamp(value, min, max);
     clamped = Math.round(clamped / step) * step;
+    if (fromState && prev !== undefined && Math.abs(prev - clamped) <= step * 0.25) {
+      return;
+    }
     if (ctrl.value !== undefined && Math.abs(ctrl.value - clamped) < step * 0.25 && fromState) {
       return;
     }
@@ -230,6 +234,7 @@
       const span = ctrl.max - ctrl.min;
       const sensitivity = span / 250;
       ctrl.active = true;
+      if (indicator) indicator.style.transition = 'none';
       const move = (moveEv) => {
         const delta = (startY - moveEv.clientY) * sensitivity;
         const next = startVal + delta;
@@ -241,6 +246,7 @@
         knob.removeEventListener('pointerup', up);
         knob.removeEventListener('pointercancel', up);
         ctrl.active = false;
+        if (indicator) indicator.style.transition = '';
         setControlValue(ctrl.param, ctrl.value, { fromState: false, immediate: true });
       };
       knob.addEventListener('pointermove', move);
