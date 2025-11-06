@@ -4,6 +4,14 @@
 .python-libs/
 arduino-cli.yaml
 .arduino-core-install.log
+firmware/arduino/bootbox_mcu_fw/build/
+.vscode/
+.idea/
+.venv/
+__pycache__/
+*.log
+*.tmp
+*.swp
 
 # General build artifacts
 *.elf

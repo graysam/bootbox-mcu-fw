@@ -1,15 +1,15 @@
 ## BOOTBOX DSP MCU Firmware
 
-Firmware for an ESP32-based system controller for a DIY car stereo using an ADAU1701 DSP. The ESP32 hosts a local web UI, provides a robust WebSocket control channel, manages thermal control (PID/manual), and stores presets/assets in LittleFS.
+Firmware for a Wi-Fi MCU system controller for a DIY car stereo using an ADAU1701 DSP. The controller hosts a local web UI, provides a robust WebSocket control channel, manages thermal control (PID/manual), and stores presets/assets in LittleFS.
 
 ## Quick Start
-- Board: ESP32 DevKitC / NodeMCU-32S (default pins in sketch)
+- Board: target pinout matches DevKit-style layouts by default (adjust in `config.h` as needed).
 - Build + package (Arduino CLI):
   - `ARDUINO_CLI_CONFIG=./arduino-cli.yaml tools/arduino-build.sh --fqbn esp32:esp32:esp32`
 - Upload firmware **and** LittleFS:
   - `PORT=/dev/ttyUSB0 ARDUINO_CLI_CONFIG=./arduino-cli.yaml tools/arduino-upload.sh --fqbn esp32:esp32:esp32`
 - Optional serial monitor: `PORT=/dev/ttyUSB0 tools/arduino-monitor.sh`
-- First boot: ESP32 starts open AP `BOOTBOXDSP` (no password). Open `http://192.168.4.1`.
+- First boot: controller starts open AP `BOOTBOXDSP` (no password). Open `http://192.168.4.1`.
 - UI assets live in `firmware/arduino/bootbox_mcu_fw/data/`; the build script repacks them into the LittleFS image automatically.
 
 ## Features
@@ -31,7 +31,7 @@ Firmware for an ESP32-based system controller for a DIY car stereo using an ADAU
 - ADAU1701: I2C for control (future): `SDA -> GPIO21`, `SCL -> GPIO22`. SPI/I2S for audio as needed by your module (not yet used here).
 
 ## Libraries
-- ESPAsyncWebServer, AsyncTCP, ArduinoJson, LittleFS, Preferences (ESP32 core). Install via Boards Manager/Library Manager.
+- ESPAsyncWebServer, AsyncTCP, ArduinoJson, LittleFS, Preferences (Arduino core). Install via Boards Manager/Library Manager.
 
 ## Notes
 - Tuning: adjust PID gains in UI. Setpoints default to 45/55°C. Replace `adcToTempC()` with your NTC curve.

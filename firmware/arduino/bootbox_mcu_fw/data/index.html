@@ -82,6 +82,38 @@
         gap: 20px;
         grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
       }
+      .tabs {
+        display: flex;
+        gap: 12px;
+        margin-top: 32px;
+        border-bottom: 1px solid rgba(41,57,79,0.6);
+        padding-bottom: 8px;
+      }
+      .tab-btn {
+        background: rgba(20,28,42,0.65);
+        border: 1px solid rgba(46,64,92,0.8);
+        border-radius: 999px;
+        padding: 8px 18px;
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        color: var(--text-muted);
+        cursor: pointer;
+        transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+      }
+      .tab-btn.active {
+        background: var(--accent);
+        border-color: rgba(59,130,246,0.9);
+        color: #fff;
+        box-shadow: 0 10px 24px -16px rgba(59,130,246,0.75);
+      }
+      .tab-pane {
+        display: none;
+        margin-top: 24px;
+      }
+      .tab-pane.active {
+        display: block;
+      }
       .card {
         background: linear-gradient(135deg, rgba(16,23,36,0.92), rgba(16,27,42,0.88));
         border: 1px solid rgba(49,66,93,0.5);
@@ -91,13 +123,18 @@
         backdrop-filter: blur(10px);
         display: flex;
         flex-direction: column;
-        gap: 18px;
+        gap: 0;
       }
       .card-header {
         display: flex;
         justify-content: space-between;
         align-items: flex-start;
         gap: 12px;
+      }
+      .card-header .header-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
       }
       .card-header .muted { display: block; font-size: 14px; margin-top: 6px; color: var(--text-muted); }
       .badge {
@@ -110,6 +147,38 @@
         color: var(--text);
         letter-spacing: 0.06em;
         text-transform: uppercase;
+      }
+      .card-body {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+        margin-top: 18px;
+      }
+      .collapse-toggle {
+        border: none;
+        background: rgba(24,32,46,0.6);
+        border-radius: 999px;
+        width: 28px;
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-muted);
+        cursor: pointer;
+        transition: transform 0.2s ease, background 0.2s ease;
+      }
+      .collapse-toggle:hover {
+        background: rgba(59,130,246,0.2);
+        color: var(--text);
+      }
+      .collapse-toggle .chevron {
+        transition: transform 0.2s ease;
+      }
+      .card.collapsed .collapse-toggle .chevron {
+        transform: rotate(-90deg);
+      }
+      .card.collapsed .card-body {
+        display: none;
       }
       .metrics-grid {
         display: grid;
@@ -128,6 +197,39 @@
       }
       .metric .value.small {
         font-size: 22px;
+      }
+      .sys-grid .value {
+        font-size: 24px;
+      }
+      .meta-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
+        margin-top: 16px;
+      }
+      .meta-row {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        padding: 12px;
+        border-radius: 12px;
+        background: rgba(17,26,38,0.55);
+        border: 1px solid rgba(35,48,68,0.5);
+      }
+      .meta-label {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-muted);
+      }
+      .meta-value {
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--text);
+      }
+      .meta-row .meta-hint {
+        font-size: 12px;
+        color: var(--text-muted);
       }
       .footnote {
         font-size: 13px;
@@ -504,7 +606,7 @@
       <header class="topbar">
         <div>
           <h1>BOOTBOX DSP</h1>
-          <p class="subtitle">ESP32 thermal + DSP controller</p>
+          <p class="subtitle">Integrated thermal + DSP controller</p>
         </div>
         <div class="chip idle" id="conn-chip">
           <span class="dot" id="conn-dot"></span>
@@ -512,223 +614,342 @@
         </div>
       </header>
 
-      <section class="grid">
-        <article class="card metrics">
-          <header class="card-header">
-            <div>
-              <h2>System Snapshot</h2>
-              <span class="muted">Live telemetry from the controller</span>
-            </div>
-            <span class="badge" id="mode-badge">PID</span>
-          </header>
-          <div class="metrics-grid">
-            <div class="metric">
-              <div class="label">Temp 1</div>
-              <div class="value" id="temp1">—</div>
-            </div>
-            <div class="metric">
-              <div class="label">Temp 2</div>
-              <div class="value" id="temp2">—</div>
-            </div>
-            <div class="metric">
-              <div class="label">Fan RPM</div>
-              <div class="value small" id="fanrpm">—</div>
-            </div>
-            <div class="metric">
-              <div class="label">Fan Target</div>
-              <div class="value small" id="fantarget">—</div>
-            </div>
-          </div>
-          <div class="footnote">Last update <span id="last-update">never</span></div>
-        </article>
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="cooling">Cooling</button>
+        <button class="tab-btn" data-tab="dsp">DSP</button>
+        <button class="tab-btn" data-tab="system">System</button>
+      </div>
 
-        <article class="card control">
-          <header class="card-header">
-            <div>
-              <h2>Thermal Control</h2>
-              <span class="muted">Tune PID or set a manual fan target</span>
-            </div>
-          </header>
-          <div class="mode-toggle">
-            <button id="mode-pid" class="pill active">PID Mode</button>
-            <button id="mode-manual" class="pill">Manual Mode</button>
-          </div>
-
-          <div class="manual-block">
-            <label for="manpct" class="label">Manual fan target</label>
-            <div class="slider-row">
-              <input id="manpct" type="range" min="0" max="100" step="1" />
-              <span class="value-sm" id="manpct-value">0%</span>
-            </div>
-            <p class="hint">Select Manual mode to enable the slider.</p>
-          </div>
-
-          <div class="field-group">
-            <label for="sp1" class="label">Setpoint 1 (°C)</label>
-            <input id="sp1" type="number" min="0" max="120" step="0.5" />
-            <span class="live-pill" id="live-sp1">Applied: —</span>
-          </div>
-          <div class="field-group">
-            <label for="sp2" class="label">Setpoint 2 (°C)</label>
-            <input id="sp2" type="number" min="0" max="120" step="0.5" />
-            <span class="live-pill" id="live-sp2">Applied: —</span>
-          </div>
-
-          <div class="field-group">
-            <label class="label">PID gains</label>
-            <div class="field-group tri">
+      <section class="tab-pane active" data-tab="cooling">
+        <div class="grid">
+          <article class="card metrics collapsible" data-card="snapshot">
+            <header class="card-header">
               <div>
-                <label for="kp" class="label">Kp</label>
-                <input id="kp" type="number" step="0.1" />
-                <span class="live-pill" id="live-kp">Applied: —</span>
+                <h2>System Snapshot</h2>
+                <span class="muted">Live telemetry from the controller</span>
               </div>
-              <div>
-                <label for="ki" class="label">Ki</label>
-                <input id="ki" type="number" step="0.01" />
-                <span class="live-pill" id="live-ki">Applied: —</span>
+              <div class="header-actions">
+                <span class="badge" id="mode-badge">PID</span>
+                <button class="collapse-toggle" aria-label="Toggle snapshot">
+                  <span class="chevron">▾</span>
+                </button>
               </div>
-              <div>
-                <label for="kd" class="label">Kd</label>
-                <input id="kd" type="number" step="0.01" />
-                <span class="live-pill" id="live-kd">Applied: —</span>
+            </header>
+            <div class="card-body">
+              <div class="metrics-grid">
+                <div class="metric">
+                  <div class="label">Temp 1</div>
+                  <div class="value" id="temp1">—</div>
+                </div>
+                <div class="metric">
+                  <div class="label">Temp 2</div>
+                  <div class="value" id="temp2">—</div>
+                </div>
+                <div class="metric">
+                  <div class="label">Fan RPM</div>
+                  <div class="value small" id="fanrpm">—</div>
+                </div>
+                <div class="metric">
+                  <div class="label">Fan Target</div>
+                  <div class="value small" id="fantarget">—</div>
+                </div>
               </div>
+              <div class="footnote">Last update <span id="last-update">never</span></div>
             </div>
-          </div>
+          </article>
 
-          <div class="actions">
-            <button id="save">Save changes</button>
-            <button class="secondary" id="refresh">Sync from device</button>
-          </div>
-        <div class="status-line" id="status-line">Waiting for device …</div>
-        </article>
+          <article class="card control collapsible" data-card="thermal">
+            <header class="card-header">
+              <div>
+                <h2>Thermal Control</h2>
+                <span class="muted">Tune PID or set a manual fan target</span>
+              </div>
+              <div class="header-actions">
+                <button class="collapse-toggle" aria-label="Toggle thermal controls">
+                  <span class="chevron">▾</span>
+                </button>
+              </div>
+            </header>
+            <div class="card-body">
+              <div class="mode-toggle">
+                <button id="mode-pid" class="pill active">PID Mode</button>
+                <button id="mode-manual" class="pill">Manual Mode</button>
+              </div>
 
-        <article class="card dsp">
+              <div class="manual-block">
+                <label for="manpct" class="label">Manual fan target</label>
+                <div class="slider-row">
+                  <input id="manpct" type="range" min="0" max="100" step="1" />
+                  <span class="value-sm" id="manpct-value">0%</span>
+                </div>
+                <p class="hint">Select Manual mode to enable the slider.</p>
+              </div>
+
+              <div class="field-group">
+                <label for="sp1" class="label">Setpoint 1 (°C)</label>
+                <input id="sp1" type="number" min="0" max="120" step="0.5" />
+                <span class="live-pill" id="live-sp1">Applied: —</span>
+              </div>
+              <div class="field-group">
+                <label for="sp2" class="label">Setpoint 2 (°C)</label>
+                <input id="sp2" type="number" min="0" max="120" step="0.5" />
+                <span class="live-pill" id="live-sp2">Applied: —</span>
+              </div>
+
+              <div class="field-group">
+                <label class="label">PID gains</label>
+                <div class="field-group tri">
+                  <div>
+                    <label for="kp" class="label">Kp</label>
+                    <input id="kp" type="number" step="0.1" />
+                    <span class="live-pill" id="live-kp">Applied: —</span>
+                  </div>
+                  <div>
+                    <label for="ki" class="label">Ki</label>
+                    <input id="ki" type="number" step="0.01" />
+                    <span class="live-pill" id="live-ki">Applied: —</span>
+                  </div>
+                  <div>
+                    <label for="kd" class="label">Kd</label>
+                    <input id="kd" type="number" step="0.01" />
+                    <span class="live-pill" id="live-kd">Applied: —</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="actions">
+                <button id="save">Save changes</button>
+                <button class="secondary" id="refresh">Sync from device</button>
+              </div>
+              <div class="status-line" id="status-line">Waiting for device …</div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="tab-pane" data-tab="dsp">
+        <article class="card dsp collapsible" data-card="dsp-mixer">
           <header class="card-header">
             <div>
               <h2>DSP Mixer</h2>
               <span class="muted">Live controls for ADAU1701 routing</span>
             </div>
-            <span class="badge value-sm">BETA</span>
+            <div class="header-actions">
+              <span class="badge value-sm">BETA</span>
+              <button class="collapse-toggle" aria-label="Toggle DSP mixer">
+                <span class="chevron">▾</span>
+              </button>
+            </div>
           </header>
+          <div class="card-body">
+            <div class="dsp-grid">
+              <div class="knob-block dsp-control" data-param="master_db" data-type="knob" data-min="-60" data-max="12" data-step="0.5" data-unit="dB">
+                <div class="value-display" data-role="display">-6.0 dB</div>
+                <div class="knob-shell" data-role="knob">
+                  <div class="knob-indicator"></div>
+                </div>
+                <div class="label">Master Volume</div>
+              </div>
 
-          <div class="dsp-grid">
-            <div class="knob-block dsp-control" data-param="master_db" data-type="knob" data-min="-60" data-max="12" data-step="0.5" data-unit="dB">
-              <div class="value-display" data-role="display">-6.0 dB</div>
-              <div class="knob-shell" data-role="knob">
-                <div class="knob-indicator"></div>
+              <div class="knob-block dsp-control" data-param="stereo_db" data-type="knob" data-min="-40" data-max="12" data-step="0.5" data-unit="dB">
+                <div class="value-display" data-role="display">0.0 dB</div>
+                <div class="knob-shell" data-role="knob">
+                  <div class="knob-indicator"></div>
+                </div>
+                <div class="label">Stereo Gain</div>
               </div>
-              <div class="label">Master Volume</div>
+
+              <div class="knob-block dsp-control" data-param="sub_lo_db" data-type="knob" data-min="-40" data-max="12" data-step="0.5" data-unit="dB">
+                <div class="value-display" data-role="display">0.0 dB</div>
+                <div class="knob-shell" data-role="knob">
+                  <div class="knob-indicator"></div>
+                </div>
+                <div class="label">Sub Low Gain</div>
+              </div>
+
+              <div class="knob-block dsp-control" data-param="sub_hi_db" data-type="knob" data-min="-40" data-max="12" data-step="0.5" data-unit="dB">
+                <div class="value-display" data-role="display">0.0 dB</div>
+                <div class="knob-shell" data-role="knob">
+                  <div class="knob-indicator"></div>
+                </div>
+                <div class="label">Sub High Gain</div>
+              </div>
             </div>
 
-            <div class="knob-block dsp-control" data-param="stereo_db" data-type="knob" data-min="-40" data-max="12" data-step="0.5" data-unit="dB">
-              <div class="value-display" data-role="display">0.0 dB</div>
-              <div class="knob-shell" data-role="knob">
-                <div class="knob-indicator"></div>
+            <div class="crossover-section">
+              <div class="section-head">
+                <h3 style="margin:0; font-size:16px;">Crossovers</h3>
+                <label class="link-checkbox"><input type="checkbox" id="cross-link" checked /> <span>Link subs &amp; mains</span></label>
               </div>
-              <div class="label">Stereo Gain</div>
-            </div>
-
-            <div class="knob-block dsp-control" data-param="sub_lo_db" data-type="knob" data-min="-40" data-max="12" data-step="0.5" data-unit="dB">
-              <div class="value-display" data-role="display">0.0 dB</div>
-              <div class="knob-shell" data-role="knob">
-                <div class="knob-indicator"></div>
+              <div class="crossover-row">
+                <div class="slider-block dsp-control" data-param="cross_mains_hz" data-type="slider" data-min="40" data-max="300" data-step="1" data-unit="Hz">
+                  <div class="label">Mains high-pass</div>
+                  <input type="range" min="40" max="300" step="1" value="120" />
+                  <div class="value-display" data-role="display">120 Hz</div>
+                </div>
+                <div class="slider-block dsp-control" data-param="cross_sub_hz" data-type="slider" data-min="30" data-max="240" data-step="1" data-unit="Hz">
+                  <div class="label">Subs low-pass</div>
+                  <input type="range" min="30" max="240" step="1" value="80" />
+                  <div class="value-display" data-role="display">80 Hz</div>
+                </div>
               </div>
-              <div class="label">Sub Low Gain</div>
-            </div>
-
-            <div class="knob-block dsp-control" data-param="sub_hi_db" data-type="knob" data-min="-40" data-max="12" data-step="0.5" data-unit="dB">
-              <div class="value-display" data-role="display">0.0 dB</div>
-              <div class="knob-shell" data-role="knob">
-                <div class="knob-indicator"></div>
-              </div>
-              <div class="label">Sub High Gain</div>
-            </div>
-          </div>
-
-          <div class="crossover-section">
-            <div class="section-head">
-              <h3 style="margin:0; font-size:16px;">Crossovers</h3>
-              <label class="link-checkbox"><input type="checkbox" id="cross-link" checked /> <span>Link subs &amp; mains</span></label>
-            </div>
-            <div class="crossover-row">
-              <div class="slider-block dsp-control" data-param="cross_mains_hz" data-type="slider" data-min="40" data-max="300" data-step="1" data-unit="Hz">
-                <div class="label">Mains high-pass</div>
-                <input type="range" min="40" max="300" step="1" value="120" />
-                <div class="value-display" data-role="display">120 Hz</div>
-              </div>
-              <div class="slider-block dsp-control" data-param="cross_sub_hz" data-type="slider" data-min="30" data-max="240" data-step="1" data-unit="Hz">
-                <div class="label">Subs low-pass</div>
-                <input type="range" min="30" max="240" step="1" value="80" />
-                <div class="value-display" data-role="display">80 Hz</div>
-              </div>
-            </div>
-            <div class="fader-grid">
-              <div class="fader-card">
-                <h4>Sub low band</h4>
-                <div class="fader-pair">
-                  <div class="fader dsp-control" data-param="sub_lo_hp_hz" data-type="fader" data-min="15" data-max="180" data-step="1" data-unit="Hz">
-                    <input type="range" min="15" max="180" step="1" value="25" />
-                    <div class="value-display" data-role="display">25 Hz</div>
-                    <span class="label">High-pass</span>
+              <div class="fader-grid">
+                <div class="fader-card">
+                  <h4>Sub low band</h4>
+                  <div class="fader-pair">
+                    <div class="fader dsp-control" data-param="sub_lo_hp_hz" data-type="fader" data-min="15" data-max="180" data-step="1" data-unit="Hz">
+                      <input type="range" min="15" max="180" step="1" value="25" />
+                      <div class="value-display" data-role="display">25 Hz</div>
+                      <span class="label">High-pass</span>
+                    </div>
+                    <div class="fader dsp-control" data-param="sub_lo_lp_hz" data-type="fader" data-min="30" data-max="220" data-step="1" data-unit="Hz">
+                      <input type="range" min="30" max="220" step="1" value="80" />
+                      <div class="value-display" data-role="display">80 Hz</div>
+                      <span class="label">Low-pass</span>
+                    </div>
                   </div>
-                  <div class="fader dsp-control" data-param="sub_lo_lp_hz" data-type="fader" data-min="30" data-max="220" data-step="1" data-unit="Hz">
-                    <input type="range" min="30" max="220" step="1" value="80" />
-                    <div class="value-display" data-role="display">80 Hz</div>
-                    <span class="label">Low-pass</span>
+                </div>
+                <div class="fader-card">
+                  <h4>Sub high band</h4>
+                  <div class="fader-pair">
+                    <div class="fader dsp-control" data-param="sub_hi_hp_hz" data-type="fader" data-min="40" data-max="240" data-step="1" data-unit="Hz">
+                      <input type="range" min="40" max="240" step="1" value="70" />
+                      <div class="value-display" data-role="display">70 Hz</div>
+                      <span class="label">High-pass</span>
+                    </div>
+                    <div class="fader dsp-control" data-param="sub_hi_lp_hz" data-type="fader" data-min="60" data-max="260" data-step="1" data-unit="Hz">
+                      <input type="range" min="60" max="260" step="1" value="160" />
+                      <div class="value-display" data-role="display">160 Hz</div>
+                      <span class="label">Low-pass</span>
+                    </div>
                   </div>
                 </div>
               </div>
-              <div class="fader-card">
-                <h4>Sub high band</h4>
-                <div class="fader-pair">
-                  <div class="fader dsp-control" data-param="sub_hi_hp_hz" data-type="fader" data-min="40" data-max="240" data-step="1" data-unit="Hz">
-                    <input type="range" min="40" max="240" step="1" value="70" />
-                    <div class="value-display" data-role="display">70 Hz</div>
-                    <span class="label">High-pass</span>
-                  </div>
-                  <div class="fader dsp-control" data-param="sub_hi_lp_hz" data-type="fader" data-min="60" data-max="260" data-step="1" data-unit="Hz">
-                    <input type="range" min="60" max="260" step="1" value="160" />
-                    <div class="value-display" data-role="display">160 Hz</div>
-                    <span class="label">Low-pass</span>
-                  </div>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="tab-pane" data-tab="system">
+        <div class="grid">
+          <article class="card system collapsible" data-card="system-summary">
+            <header class="card-header">
+              <div>
+                <h2>Controller summary</h2>
+                <span class="muted">Hardware, firmware, and network status</span>
+              </div>
+              <div class="header-actions">
+                <button class="collapse-toggle" aria-label="Toggle system summary">
+                  <span class="chevron">▾</span>
+                </button>
+              </div>
+            </header>
+            <div class="card-body">
+              <div class="metrics-grid sys-grid">
+                <div class="metric">
+                  <div class="label">Uptime</div>
+                  <div class="value" id="sys-uptime">—</div>
+                </div>
+                <div class="metric">
+                  <div class="label">Heap free</div>
+                  <div class="value small" id="sys-heap">—</div>
+                </div>
+                <div class="metric">
+                  <div class="label">CPU clock</div>
+                  <div class="value small" id="sys-cpu">—</div>
+                </div>
+                <div class="metric">
+                  <div class="label">Clients</div>
+                  <div class="value small" id="sys-clients">0</div>
+                </div>
+              </div>
+              <div class="meta-grid">
+                <div class="meta-row">
+                  <span class="meta-label">Firmware</span>
+                  <span class="meta-value" id="sys-fw">—</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-label">Build</span>
+                  <span class="meta-value" id="sys-build">—</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-label">SDK</span>
+                  <span class="meta-value" id="sys-sdk">—</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-label">MCU</span>
+                  <span class="meta-value" id="sys-chip">—</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-label">Reset reason</span>
+                  <span class="meta-value" id="sys-reset">—</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-label">Boot count</span>
+                  <span class="meta-value" id="sys-boot">—</span>
+                </div>
+              </div>
+              <div class="meta-grid">
+                <div class="meta-row">
+                  <span class="meta-label">Access point</span>
+                  <span class="meta-value" id="sys-ip">—</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-label">Filesystem</span>
+                  <span class="meta-value" id="sys-fs">—</span>
+                  <span class="meta-hint" id="sys-fs-hint">Filesystem not mounted</span>
                 </div>
               </div>
             </div>
-          </div>
-        </article>
+          </article>
 
-        <article class="card logs">
-          <header class="card-header">
-            <div>
-              <h2>Logs & diagnostics</h2>
-              <span class="muted">Inspect the controller ring buffer</span>
+          <article class="card logs collapsible" data-card="logs">
+            <header class="card-header">
+              <div>
+                <h2>Logs & diagnostics</h2>
+                <span class="muted">Inspect the controller ring buffer</span>
+              </div>
+              <div class="header-actions">
+                <label class="checkbox" style="margin:0;">
+                  <input type="checkbox" id="auto-scroll" checked />
+                  <span>Auto-scroll</span>
+                </label>
+                <button class="collapse-toggle" aria-label="Toggle logs">
+                  <span class="chevron">▾</span>
+                </button>
+              </div>
+            </header>
+            <div class="card-body">
+              <div class="log-actions">
+                <button class="secondary" id="getlogs">Fetch logs</button>
+                <button class="secondary" id="clearlog">Clear</button>
+              </div>
+              <pre id="log" class="log-view">(empty)</pre>
             </div>
-            <label class="checkbox">
-              <input type="checkbox" id="auto-scroll" checked />
-              <span>Auto-scroll</span>
-            </label>
-          </header>
-          <div class="log-actions">
-            <button class="secondary" id="getlogs">Fetch logs</button>
-            <button class="secondary" id="clearlog">Clear</button>
-          </div>
-          <pre id="log" class="log-view">(empty)</pre>
-        </article>
+          </article>
 
-        <article class="card upload">
-          <header class="card-header">
-            <div>
-              <h2>ADAU program upload</h2>
-              <span class="muted">Push SigmaStudio binaries to the controller</span>
+          <article class="card upload collapsible" data-card="upload">
+            <header class="card-header">
+              <div>
+                <h2>ADAU program upload</h2>
+                <span class="muted">Push SigmaStudio binaries to the controller</span>
+              </div>
+              <div class="header-actions">
+                <button class="collapse-toggle" aria-label="Toggle ADAU upload">
+                  <span class="chevron">▾</span>
+                </button>
+              </div>
+            </header>
+            <div class="card-body">
+              <p class="hint">Select a compiled ADAU1701 binary (<code>.bin</code>). The file is stored under <code>/dsp</code> on LittleFS.</p>
+              <div class="upload-actions">
+                <button id="upload-btn" class="secondary">Select file…</button>
+                <input id="upload-input" type="file" accept=".bin,.ldf,.hex,.zip" hidden />
+                <span id="upload-status" class="muted">No file chosen yet.</span>
+              </div>
             </div>
-          </header>
-          <p class="hint">Select a compiled ADAU1701 binary (<code>.bin</code>). The file is stored under <code>/dsp</code> on LittleFS.</p>
-          <div class="upload-actions">
-            <button id="upload-btn" class="secondary">Select file…</button>
-            <input id="upload-input" type="file" accept=".bin,.ldf,.hex,.zip" hidden />
-            <span id="upload-status" class="muted">No file chosen yet.</span>
-          </div>
-        </article>
+          </article>
+        </div>
       </section>
     </div>
     <div id="toast-stack"></div>

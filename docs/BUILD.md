@@ -1,10 +1,10 @@
 # Build and Upload (Arduino CLI)
 
-This project uses the Arduino-ESP32 core with Async Web Server + WebSocket UI. These steps bring a fresh machine to build/upload readiness.
+This project targets an Arduino Wi-Fi MCU with Async Web Server + WebSocket UI. Follow these steps to bring a fresh machine to build/upload readiness.
 
 ## Prereqs
-- Install Arduino CLI and ESP32 core (per Arduino docs).
-- Ensure the ESP32 board FQBN (default `esp32:esp32:esp32`) is installed.
+- Install Arduino CLI and the board support package defined in `arduino-cli.yaml`.
+- Ensure the board FQBN recorded in `arduino-cli.yaml` (default `esp32:esp32:esp32`) is installed.
 
 ## Install Libraries
 
@@ -18,7 +18,7 @@ Installs:
 - ESP Async WebServer
 - AsyncTCP
 - ArduinoJson
-- LittleFS_esp32 (only needed for older ESP32 cores; 3.x has LittleFS built-in)
+- LittleFS filesystem shim (only needed for older cores; recent releases include LittleFS)
 
 ## Build + Package
 
@@ -51,7 +51,7 @@ PORT=/dev/ttyUSB0 tools/arduino-monitor.sh
 ```
 
 ## First Boot
-- ESP32 starts open AP `BOOTBOXDSP` (no password).
+- Controller starts open AP `BOOTBOXDSP` (no password).
 - Browse to `http://192.168.4.1/` to load the UI.
 
 ## Notes

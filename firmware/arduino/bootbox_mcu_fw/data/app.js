@@ -1,50 +1,68 @@
 (() => {
   const $ = (id) => document.getElementById(id);
 
-  const S = {
-    conn: $('conn'),
-    connDot: $('conn-dot'),
-    connChip: $('conn-chip'),
-    modeBadge: $('mode-badge'),
-    temp1: $('temp1'),
-    temp2: $('temp2'),
-    fanrpm: $('fanrpm'),
-    fantarget: $('fantarget'),
-    lastUpdate: $('last-update'),
-    modePid: $('mode-pid'),
-    modeManual: $('mode-manual'),
-    manpct: $('manpct'),
-    manpctValue: $('manpct-value'),
-    sp1: $('sp1'),
-    sp2: $('sp2'),
-    kp: $('kp'),
-    ki: $('ki'),
-    kd: $('kd'),
-    save: $('save'),
-    refresh: $('refresh'),
-    statusLine: $('status-line'),
-    log: $('log'),
-    autoScroll: $('auto-scroll'),
-    getlogs: $('getlogs'),
-    clearlog: $('clearlog'),
-    uploadBtn: $('upload-btn'),
-    uploadInput: $('upload-input'),
-    uploadStatus: $('upload-status'),
-    toastStack: $('toast-stack'),
-    crossLink: $('cross-link'),
-    liveSp1: $('live-sp1'),
-    liveSp2: $('live-sp2'),
-    liveKp: $('live-kp'),
-    liveKi: $('live-ki'),
-    liveKd: $('live-kd')
-  };
+const S = {
+  conn: $('conn'),
+  connDot: $('conn-dot'),
+  connChip: $('conn-chip'),
+  modeBadge: $('mode-badge'),
+  temp1: $('temp1'),
+  temp2: $('temp2'),
+  fanrpm: $('fanrpm'),
+  fantarget: $('fantarget'),
+  lastUpdate: $('last-update'),
+  modePid: $('mode-pid'),
+  modeManual: $('mode-manual'),
+  manpct: $('manpct'),
+  manpctValue: $('manpct-value'),
+  sp1: $('sp1'),
+  sp2: $('sp2'),
+  kp: $('kp'),
+  ki: $('ki'),
+  kd: $('kd'),
+  save: $('save'),
+  refresh: $('refresh'),
+  statusLine: $('status-line'),
+  log: $('log'),
+  autoScroll: $('auto-scroll'),
+  getlogs: $('getlogs'),
+  clearlog: $('clearlog'),
+  uploadBtn: $('upload-btn'),
+  uploadInput: $('upload-input'),
+  uploadStatus: $('upload-status'),
+  toastStack: $('toast-stack'),
+  crossLink: $('cross-link'),
+  liveSp1: $('live-sp1'),
+  liveSp2: $('live-sp2'),
+  liveKp: $('live-kp'),
+  liveKi: $('live-ki'),
+  liveKd: $('live-kd'),
+  sysUptime: $('sys-uptime'),
+  sysHeap: $('sys-heap'),
+  sysCpu: $('sys-cpu'),
+  sysClients: $('sys-clients'),
+  sysFs: $('sys-fs'),
+  sysFsHint: $('sys-fs-hint'),
+  sysFw: $('sys-fw'),
+  sysBuild: $('sys-build'),
+  sysSdk: $('sys-sdk'),
+  sysChip: $('sys-chip'),
+  sysIp: $('sys-ip'),
+  sysReset: $('sys-reset'),
+  sysBoot: $('sys-boot')
+};
 
   const stateCache = {
     fanCount: 1,
     pidEnabled: true,
     manualPct: 30,
     awaitingApply: false,
-    dsp: {}
+    modeDirty: false,
+    manualDirty: false,
+    appliedPid: true,
+    appliedManualPct: 30,
+    dsp: {},
+    sys: {}
   };
 
   const DSP_META = {
@@ -106,6 +124,20 @@
   let reconnectBackoff = 500;
   let pendingDsp = {};
   let dspFlushTimer = null;
+  const TAB_STORAGE_KEY = 'bootbox:tab';
+  const CARD_STORAGE_KEY = 'bootbox:cards';
+
+  function loadJSON(key, fallback) {
+    if (typeof localStorage === 'undefined') return fallback;
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return fallback;
+      const parsed = JSON.parse(raw);
+      return typeof parsed === 'object' && parsed !== null ? parsed : fallback;
+    } catch {
+      return fallback;
+    }
+  }
 
   function setConnection(text, level = 'idle') {
     S.conn.textContent = text;
@@ -128,6 +160,35 @@
 
   function clamp(value, min, max) {
     return Math.min(Math.max(value, min), max);
+  }
+
+  function formatBytes(bytes) {
+    if (!Number.isFinite(bytes)) return '—';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let value = bytes;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit++;
+    }
+    return `${value.toFixed(value < 10 && unit > 0 ? 1 : 0)} ${units[unit]}`;
+  }
+
+  function formatUptime(ms) {
+    if (!Number.isFinite(ms) || ms <= 0) return '0s';
+    let seconds = Math.floor(ms / 1000);
+    const days = Math.floor(seconds / 86400);
+    seconds -= days * 86400;
+    const hours = Math.floor(seconds / 3600);
+    seconds -= hours * 3600;
+    const minutes = Math.floor(seconds / 60);
+    seconds -= minutes * 60;
+    const parts = [];
+    if (days) parts.push(`${days}d`);
+    if (hours) parts.push(`${hours}h`);
+    if (minutes && parts.length < 3) parts.push(`${minutes}m`);
+    if (parts.length < 2) parts.push(`${seconds}s`);
+    return parts.join(' ');
   }
 
   function queueDspUpdate(param, value, immediate = false) {
@@ -162,21 +223,44 @@
     return cleaned;
   }
 
+  function hasDirtyThermalInputs() {
+    return Object.values(thermalFields).some((field) => field.el?.dataset?.dirty === 'true');
+  }
+
   function setFormStatus(text, variant = '') {
     S.statusLine.textContent = text;
     S.statusLine.classList.remove('success', 'error', 'pending');
     if (variant) S.statusLine.classList.add(variant);
   }
 
-  function setModeUI(pidEnabled) {
+  function setModeUI(pidEnabled, options = {}) {
+    const { fromState = false } = options;
+    if (fromState) {
+      stateCache.appliedPid = pidEnabled;
+      if (stateCache.modeDirty && stateCache.pidEnabled !== pidEnabled) {
+        refreshModeBadge();
+        return;
+      }
+      stateCache.modeDirty = false;
+    } else {
+      stateCache.modeDirty = pidEnabled !== stateCache.appliedPid;
+    }
     stateCache.pidEnabled = pidEnabled;
+    if (!fromState && pidEnabled) {
+      stateCache.manualDirty = false;
+      updateManualSlider(stateCache.manualPct, false);
+    }
     S.modePid.classList.toggle('active', pidEnabled);
     S.modeManual.classList.toggle('active', !pidEnabled);
-    const modeLabel = pidEnabled ? 'PID' : 'Manual';
-    const fansLabel = `${stateCache.fanCount} fan${stateCache.fanCount === 1 ? '' : 's'}`;
-    S.modeBadge.textContent = `${modeLabel} · ${fansLabel}`;
+    refreshModeBadge();
     S.manpct.disabled = pidEnabled;
     S.manpctValue.style.opacity = pidEnabled ? '0.5' : '1';
+  }
+
+  function refreshModeBadge() {
+    const modeLabel = stateCache.pidEnabled ? 'PID' : 'Manual';
+    const fansLabel = `${stateCache.fanCount} fan${stateCache.fanCount === 1 ? '' : 's'}`;
+    S.modeBadge.textContent = `${modeLabel} · ${fansLabel}`;
   }
 
   function updateThermalField(key, value) {
@@ -210,10 +294,75 @@
     }
   }
 
-  function updateManualSlider(val) {
+  function updateSystemInfo(sys = {}) {
+    stateCache.sys = { ...stateCache.sys, ...sys };
+
+    if (S.sysUptime) {
+      const uptime = Number(sys.uptime_ms);
+      S.sysUptime.textContent = Number.isFinite(uptime) ? formatUptime(uptime) : '—';
+    }
+
+    if (S.sysHeap) {
+      const heapFree = Number(sys.free_heap);
+      const heapSize = Number(sys.heap_size);
+      if (Number.isFinite(heapFree) && Number.isFinite(heapSize) && heapSize > 0) {
+        const used = heapSize - heapFree;
+        const pctFree = Math.round((heapFree / heapSize) * 100);
+        S.sysHeap.textContent = `${formatBytes(heapFree)} free (${pctFree}% free)`;
+        if (typeof S.sysHeap.setAttribute === 'function') {
+          S.sysHeap.setAttribute('title', `${formatBytes(used)} used of ${formatBytes(heapSize)}`);
+        }
+      } else {
+        S.sysHeap.textContent = '—';
+        if (typeof S.sysHeap.removeAttribute === 'function') {
+          S.sysHeap.removeAttribute('title');
+        }
+      }
+    }
+
+    if (S.sysCpu) {
+      const cpu = Number(sys.cpu_freq_mhz);
+      S.sysCpu.textContent = Number.isFinite(cpu) && cpu > 0 ? `${cpu} MHz` : '—';
+    }
+
+    if (S.sysClients) {
+      const clients = Number(sys.wifi_clients);
+      S.sysClients.textContent = Number.isFinite(clients) ? `${clients}` : '0';
+    }
+
+    if (S.sysFw) S.sysFw.textContent = sys.fw_version || '—';
+    if (S.sysBuild) S.sysBuild.textContent = sys.fw_build || '—';
+    if (S.sysSdk) S.sysSdk.textContent = sys.sdk || '—';
+    if (S.sysChip) {
+      const chip = sys.chip || '';
+      const rev = Number.isFinite(sys.chip_revision) ? ` (rev ${sys.chip_revision})` : '';
+      S.sysChip.textContent = chip ? `${chip}${rev}` : '—';
+    }
+    if (S.sysIp) S.sysIp.textContent = sys.ap_ip || '—';
+    if (S.sysReset) S.sysReset.textContent = sys.reset_reason || '—';
+    if (S.sysBoot) {
+      const boot = Number(sys.boot_count);
+      S.sysBoot.textContent = Number.isFinite(boot) ? `${boot}` : '—';
+    }
+
+    if (S.sysFs && S.sysFsHint) {
+      const total = Number(sys.fs_total);
+      const used = Number(sys.fs_used);
+      if (Number.isFinite(total) && total > 0 && Number.isFinite(used) && used >= 0) {
+        const pct = Math.round(clamp((used / total) * 100, 0, 100));
+        S.sysFs.textContent = `${formatBytes(used)} / ${formatBytes(total)} (${pct}%)`;
+        S.sysFsHint.textContent = 'LittleFS mounted';
+      } else {
+        S.sysFs.textContent = '—';
+        S.sysFsHint.textContent = 'Filesystem not mounted';
+      }
+    }
+  }
+
+  function updateManualSlider(val, pendingLabel = false) {
     const pct = clamp(Number(val) || 0, 0, 100);
     S.manpct.value = pct;
-    S.manpctValue.textContent = `${pct}%`;
+    S.manpctValue.textContent = `${pct}%${pendingLabel ? ' (pending)' : ''}`;
   }
 
   function updateKnobVisual(ctrl) {
@@ -436,7 +585,7 @@
         }
         switch (msg.type) {
           case 'state':
-            applyState(msg.data || {}, msg.dsp || {});
+            applyState(msg.data || {}, msg.dsp || {}, msg.sys || {});
             ack(msg.id);
             break;
           case 'pong':
@@ -485,7 +634,7 @@
     pending.delete(id);
   }
 
-  function applyState(core, dsp) {
+  function applyState(core, dsp, sys) {
     lastUpdateTs = Date.now();
     if (typeof core.temp1 === 'number') S.temp1.textContent = `${core.temp1.toFixed(1)} °C`; else S.temp1.textContent = '—';
     if (typeof core.temp2 === 'number') S.temp2.textContent = `${core.temp2.toFixed(1)} °C`; else S.temp2.textContent = '—';
@@ -494,11 +643,23 @@
     if (typeof core.fan_count === 'number') stateCache.fanCount = Math.max(1, Math.round(core.fan_count));
 
     const pidEnabled = !!core.pid_enabled;
-    setModeUI(pidEnabled);
-    if (!pidEnabled && typeof core.fan_target_pct === 'number') {
-      stateCache.manualPct = core.fan_target_pct;
+    setModeUI(pidEnabled, { fromState: true });
+
+    if (typeof core.fan_target_pct === 'number') {
+      stateCache.appliedManualPct = core.fan_target_pct;
+      if (pidEnabled) {
+        stateCache.manualDirty = false;
+      } else if (stateCache.manualDirty && Math.round(stateCache.manualPct) === Math.round(core.fan_target_pct)) {
+        stateCache.manualDirty = false;
+      }
+      if (!stateCache.manualDirty) {
+        stateCache.manualPct = core.fan_target_pct;
+      }
     }
-    updateManualSlider(stateCache.manualPct);
+
+    if (!stateCache.manualDirty) {
+      updateManualSlider(stateCache.manualPct, false);
+    }
 
     if (typeof core.sp1 === 'number') updateThermalField('sp1', core.sp1);
     if (typeof core.sp2 === 'number') updateThermalField('sp2', core.sp2);
@@ -506,15 +667,18 @@
     if (typeof core.ki === 'number') updateThermalField('ki', core.ki);
     if (typeof core.kd === 'number') updateThermalField('kd', core.kd);
 
+    const hasDirtyThermal = hasDirtyThermalInputs();
+
     if (stateCache.awaitingApply) {
       setFormStatus('Settings applied by controller', 'success');
       stateCache.awaitingApply = false;
       showToast('Settings applied', 'success', 2200);
-    } else {
+    } else if (!stateCache.modeDirty && !stateCache.manualDirty && !hasDirtyThermal) {
       setFormStatus('Latest data received from controller', 'success');
     }
 
     updateDspFromState(dsp);
+    updateSystemInfo(sys);
   }
 
   function renderLogs(lines) {
@@ -573,7 +737,14 @@
 
   S.manpct.addEventListener('input', (ev) => {
     stateCache.manualPct = clamp(Number(ev.target.value) || 0, 0, 100);
-    updateManualSlider(stateCache.manualPct);
+    const applied = Number.isFinite(stateCache.appliedManualPct) ? stateCache.appliedManualPct : stateCache.manualPct;
+    stateCache.manualDirty = Math.round(stateCache.manualPct) !== Math.round(applied);
+    updateManualSlider(stateCache.manualPct, stateCache.manualDirty);
+    if (stateCache.manualDirty) {
+      setFormStatus('Manual fan target pending save', 'pending');
+    } else if (!stateCache.modeDirty && !hasDirtyThermalInputs()) {
+      setFormStatus('Manual fan target restored', 'success');
+    }
   });
 
   S.save.addEventListener('click', () => {
@@ -589,6 +760,9 @@
     };
     setFormStatus('Sending settings to controller…', 'pending');
     stateCache.awaitingApply = true;
+    stateCache.modeDirty = false;
+    stateCache.manualDirty = false;
+    updateManualSlider(stateCache.manualPct, false);
     send('set_settings', data);
   });
 
@@ -641,7 +815,58 @@
       }
     });
   });
+
+  const tabButtons = Array.from(document.querySelectorAll('.tab-btn'));
+  const tabPanes = Array.from(document.querySelectorAll('.tab-pane'));
+  const collapseState = loadJSON(CARD_STORAGE_KEY, {});
+
+  function setActiveTab(target) {
+    if (!target) return;
+    tabButtons.forEach((btn) => {
+      const isActive = btn.dataset.tab === target;
+      btn.classList.toggle('active', isActive);
+    });
+    tabPanes.forEach((pane) => {
+      const match = pane.dataset.tab === target;
+      pane.classList.toggle('active', match);
+    });
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(TAB_STORAGE_KEY, target);
+    }
+  }
+
+  tabButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const target = btn.dataset.tab;
+      if (!target || btn.classList.contains('active')) return;
+      setActiveTab(target);
+    });
+  });
+
+  const storedTab = typeof localStorage !== 'undefined' ? localStorage.getItem(TAB_STORAGE_KEY) : null;
+  setActiveTab(storedTab || tabButtons[0]?.dataset.tab);
+
+  document.querySelectorAll('[data-card]').forEach((card) => {
+    const toggle = card.querySelector('.collapse-toggle');
+    if (!toggle) return;
+    const cardId = card.dataset.card;
+    if (cardId && collapseState[cardId]) {
+      card.classList.add('collapsed');
+    }
+    toggle.setAttribute('aria-expanded', (!card.classList.contains('collapsed')).toString());
+    toggle.addEventListener('click', () => {
+      const collapsed = card.classList.toggle('collapsed');
+      toggle.setAttribute('aria-expanded', (!collapsed).toString());
+      if (!cardId || typeof localStorage === 'undefined') return;
+      if (collapsed) {
+        collapseState[cardId] = true;
+      } else {
+        delete collapseState[cardId];
+      }
+      localStorage.setItem(CARD_STORAGE_KEY, JSON.stringify(collapseState));
+    });
+  });
   setConnection('connecting…', 'pending');
-  updateManualSlider(stateCache.manualPct);
+  updateManualSlider(stateCache.manualPct, false);
   connectWS();
 })();
