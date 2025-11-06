@@ -241,4 +241,34 @@ Prompt: great! lets now start work on implementing the ADAU1701 features, beginn
   - WebSocket/HTTP state now advertises a `dsp` payload; new `set_dsp` handler clamps inputs, maintains crossover linkage, schedules persistence, and logs updates.
   - Rebuilt the dashboard with live knobs, sliders, and vertical faders driven by a reusable JS control layer. Displays are editable for precise entry, updates are throttled but stay responsive, and the fan badge reflects active fan count + mode.
   - Added crossover link toggle and sub-band range enforcement on both firmware and UI, plus batched WebSocket updates for smooth "analog" interaction.
-  - Follow-up tweaks: DSP card expands full-width on wide viewports, knob drag now disables transition during interaction, and redundant state echoes are ignored to prevent the "snap back" visual glitch on release. Thermal inputs now show applied vs pending values so edits no longer revert prior to saving.
+- Follow-up tweaks: DSP card expands full-width on wide viewports, knob drag now disables transition during interaction, and redundant state echoes are ignored to prevent the "snap back" visual glitch on release. Thermal inputs now show applied vs pending values so edits no longer revert prior to saving.
+- Added a lightweight tabbed layout (Cooling / DSP / System) with collapsible cards so the dashboard stays focused on the task at hand.
+Prompt: let's also remove any references to 'ESP32', keep any branding MCU agnostic.
+- Firmware/UI polish
+  - Extended `/api/state` and WebSocket broadcasts with a `sys` payload (uptime, heap, LittleFS usage, firmware build metadata, connected clients) and scrubbed chip identifiers to avoid explicit ESP32 branding.
+  - Refreshed the System tab with a summary card that renders the new diagnostics, added uptime/byte formatting helpers, and persisted both tab selection and card collapse state via `localStorage`.
+  - Updated dashboard subtitle, README, and build notes to use MCU-agnostic wording while keeping existing command examples; no user-facing copy mentions "ESP32".
+- Verification
+  - Rebuilt and reflashed unified firmware + filesystem (`tools/arduino-build.sh --config-file arduino-cli.yaml`, `tools/arduino-upload.sh --no-build --config-file arduino-cli.yaml`).
+  - Confirmed `sys` data over HTTP (`curl http://192.168.4.1/api/state`) and via a Python `websockets` client (request `get_state`, receive `state`, validate keys, send ack). UI assets fetched from LittleFS show the new System Summary markup.
+Prompt: looking good, except i am still seeing the issue with updates clearing pending settings not yet saved in a few places, particularly the pid/manual mode setting.
+- Pending state retention fixes
+  - Added explicit dirty tracking for mode toggles and the manual fan slider in `data/app.js`, preventing periodic `state` broadcasts from overwriting unsaved selections. Mode badges now refresh fan counts without clobbering user-picked modes, and manual slider labels display a `(pending)` suffix until settings are persisted.
+  - Gate controller-driven UI refreshes on dirty flags, preserve unsaved thermal edits via a helper, and soften status-line updates so "remember to save" messages persist until the user commits or reverts.
+  - Reset dirty markers on save, manual restoration, or when incoming state matches the pending value; slider/tooltips automatically clear pending cues when values converge.
+- Validation
+  - Rebuilt and reflashed (`tools/arduino-build.sh --config-file arduino-cli.yaml`; `PORT=/dev/ttyUSB0 tools/arduino-upload.sh --no-build --config-file arduino-cli.yaml`).
+  - Exercised REST/WS paths: `curl http://192.168.4.1/api/state` and a Python `websockets` smoke (toggle `set_settings` between PID/Manual, confirm transitions and reliable acks). Pending UI regression verified via code inspection; ready for interactive browser confirmation.
+Prompt: i notice that the uptime occasionally resets back to 0s, usually accompanied by a 'reconnecting' message - this seems to imply something is causing the MCU to reset?
+- Reset instrumentation & diagnostics
+  - Cached static MCU metadata (chip label, flash totals) and added `reset_reason`/`boot_count` tracking so `/api/state` + dashboard can reveal real resets versus transient Wi-Fi drops. These values now appear in the System tab alongside logs, and new boots log `reset reason` + incrementing counter.
+  - Added helper to map `esp_reset_reason()` and persisted the boot counter in Preferences; logs ring buffer shows the reason sequence for historical context.
+  - Rebuilt + reflashed (`tools/arduino-build.sh --config-file arduino-cli.yaml`; `PORT=/dev/ttyUSB0 tools/arduino-upload.sh --no-build --config-file arduino-cli.yaml`), then verified telemetry via `curl http://192.168.4.1/api/state | jq '.sys'` and `/api/logs`.
+- WS stability hardening
+  - Observed recurring panic traces bubbling up from `AsyncWebSocketClient::canSend()` after clients disconnected. Removed the custom resend queue entirely and now rely on the library-level delivery; server still emits `id` fields for optional acks, but no longer resends on our own.
+  - Rebuilt firmware (`tools/arduino-build.sh --config-file arduino-cli.yaml`). Upload pending once port access frees up.
+Prompt: so lets make a few tweaks before committing this version and harnessing the board up - can we get the onboard LED not to stay on continuously...
+- Status LED patterns
+  - Wired GPIO2 (builtin LED) into the firmware with reusable pattern definitions for Boot, System OK, Check Logs, General/Thermal/Network errors, plus placeholder Bluetooth/DSP states. Patterns use distinctive Morse-style flashes per requirement.
+  - Status is derived from boot diagnostics (reset reason, storage/AP availability) with dynamic overrides for thermal alarms; future DSP/Bluetooth hooks can call `setLedStatus` once those subsystems land.
+  - Added open-loop helper to tick the LED without blocking and documented defaults (System OK steady flash, panic resets drive “Check Logs”, thermal faults override with triple-pulse).

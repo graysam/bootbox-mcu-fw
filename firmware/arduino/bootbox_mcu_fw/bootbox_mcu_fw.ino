@@ -6,10 +6,12 @@
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 #include <esp32-hal-ledc.h>
+#include <esp_system.h>
 #include <vector>
 #include <deque>
 #include <cstddef>
 #include <cmath>
+#include <cstdio>
 
 #include "config.h"
 #include "settings.h"
@@ -34,9 +36,17 @@ Settings settings;
 Preferences prefs;
 
 static constexpr size_t FAN_SLOT_COUNT = sizeof(FAN_CTRL_PINS) / sizeof(FAN_CTRL_PINS[0]);
+static const char FW_VERSION[] = "dev";
+static const char FW_BUILD[] = __DATE__ " " __TIME__;
+static char CHIP_LABEL[32] = "unknown";
+static char RESET_REASON_LABEL[32] = "unknown";
+static uint32_t boot_count = 0;
+static size_t fs_total_bytes = 0;
 static bool settings_dirty = false;
 static uint32_t settings_dirty_since = 0;
 static constexpr uint32_t SETTINGS_SAVE_DELAY_MS = 1500;
+static bool littlefs_ready = false;
+static esp_reset_reason_t last_reset_reason = ESP_RST_UNKNOWN;
 
 static inline bool fanSlotEnabled(size_t idx) {
   return idx < FAN_SLOT_COUNT && FAN_CTRL_PINS[idx] >= 0 && FAN_PWM_CHANNELS[idx] >= 0;
@@ -61,21 +71,158 @@ static inline void markSettingsDirty() {
   settings_dirty_since = millis();
 }
 
+static void fillSystemInfo(JsonObject obj);
 static bool handleDspUpdate(JsonObject data);
+static const char* resetReasonToStr(esp_reset_reason_t reason);
 
-// Reliable WS: basic ack tracking
-struct PendingMsg {
-  uint32_t id;
-  uint32_t sent_at_ms;
-  uint8_t attempts;
-  String payload;
-  AsyncWebSocketClient* client;
+static constexpr float THERMAL_CRITICAL_MARGIN_C = 12.0f;
+
+namespace StatusLed {
+
+struct Step {
+  uint16_t duration_ms;
+  uint8_t level;
 };
 
+struct Pattern {
+  const Step* steps;
+  uint8_t count;
+};
+
+enum class Status : uint8_t {
+  Boot,
+  SystemOk,
+  SystemRunningCheckLogs,
+  GeneralError,
+  ThermalError,
+  NetworkError,
+  BluetoothError,
+  DspCommError,
+  CheckDsp,
+  CriticalError
+};
+
+static constexpr int PIN = 2;
+static constexpr bool ACTIVE_HIGH = true;
+
+static const Step PATTERN_BOOT[] = {{100, 1}, {100, 0}};
+static const Step PATTERN_OK[] = {{50, 1}, {1950, 0}};
+static const Step PATTERN_CHECK_LOGS[] = {{100, 1}, {100, 0}, {100, 1}, {600, 0}};
+static const Step PATTERN_GENERAL_ERROR[] = {{180, 1}, {120, 0}, {180, 1}, {900, 0}};
+static const Step PATTERN_THERMAL[] = {{220, 1}, {120, 0}, {220, 1}, {120, 0}, {220, 1}, {800, 0}};
+static const Step PATTERN_NETWORK[] = {{420, 1}, {160, 0}, {120, 1}, {160, 0}, {420, 1}, {900, 0}};
+static const Step PATTERN_BLUETOOTH[] = {{100, 1}, {100, 0}, {100, 1}, {100, 0}, {100, 1}, {100, 0}, {100, 1}, {700, 0}};
+static const Step PATTERN_DSP_COMM[] = {{360, 1}, {120, 0}, {360, 1}, {120, 0}, {120, 1}, {900, 0}};
+static const Step PATTERN_CHECK_DSP[] = {{120, 1}, {200, 0}, {420, 1}, {1000, 0}};
+static const Step PATTERN_CRITICAL[] = {{900, 1}, {150, 0}};
+
+static const Pattern PATTERNS[] = {
+  {PATTERN_BOOT, sizeof(PATTERN_BOOT) / sizeof(Step)},
+  {PATTERN_OK, sizeof(PATTERN_OK) / sizeof(Step)},
+  {PATTERN_CHECK_LOGS, sizeof(PATTERN_CHECK_LOGS) / sizeof(Step)},
+  {PATTERN_GENERAL_ERROR, sizeof(PATTERN_GENERAL_ERROR) / sizeof(Step)},
+  {PATTERN_THERMAL, sizeof(PATTERN_THERMAL) / sizeof(Step)},
+  {PATTERN_NETWORK, sizeof(PATTERN_NETWORK) / sizeof(Step)},
+  {PATTERN_BLUETOOTH, sizeof(PATTERN_BLUETOOTH) / sizeof(Step)},
+  {PATTERN_DSP_COMM, sizeof(PATTERN_DSP_COMM) / sizeof(Step)},
+  {PATTERN_CHECK_DSP, sizeof(PATTERN_CHECK_DSP) / sizeof(Step)},
+  {PATTERN_CRITICAL, sizeof(PATTERN_CRITICAL) / sizeof(Step)}
+};
+
+static Status current = Status::Boot;
+static Status defaultStatus = Status::SystemOk;
+static const Pattern* activePattern = nullptr;
+static uint8_t stepIndex = 0;
+static uint32_t stepStartMs = 0;
+static bool ready = false;
+
+inline void write(uint8_t level) {
+  if (!ready) return;
+  const uint8_t high = ACTIVE_HIGH ? HIGH : LOW;
+  const uint8_t low = ACTIVE_HIGH ? LOW : HIGH;
+  digitalWrite(PIN, level ? high : low);
+}
+
+void apply(const Pattern& pattern) {
+  activePattern = &pattern;
+  stepIndex = 0;
+  stepStartMs = millis();
+  write(pattern.steps[stepIndex].level);
+}
+
+const Pattern& patternFor(Status status) {
+  return PATTERNS[static_cast<uint8_t>(status)];
+}
+
+uint8_t severity(Status status) {
+  switch (status) {
+    case Status::SystemOk: return 1;
+    case Status::SystemRunningCheckLogs: return 2;
+    case Status::GeneralError: return 3;
+    case Status::CheckDsp: return 3;
+    case Status::NetworkError: return 4;
+    case Status::BluetoothError: return 4;
+    case Status::DspCommError: return 5;
+    case Status::ThermalError: return 6;
+    case Status::CriticalError: return 7;
+    case Status::Boot: return 0;
+  }
+  return 1;
+}
+
+Status higher(Status currentStatus, Status candidate) {
+  return (severity(candidate) > severity(currentStatus)) ? candidate : currentStatus;
+}
+
+void set(Status status, bool force = false) {
+  if (!ready) return;
+  if (!force && status == current) return;
+  current = status;
+  apply(patternFor(status));
+}
+
+void setDefault(Status status) {
+  defaultStatus = status;
+}
+
+Status getDefault() {
+  return defaultStatus;
+}
+
+void update() {
+  if (!ready || !activePattern || activePattern->count == 0) return;
+  const uint32_t now = millis();
+  const Step& step = activePattern->steps[stepIndex];
+  if (now - stepStartMs >= step.duration_ms) {
+    stepIndex = (stepIndex + 1) % activePattern->count;
+    stepStartMs = now;
+    write(activePattern->steps[stepIndex].level);
+  }
+}
+
+void init() {
+  pinMode(PIN, OUTPUT);
+  ready = true;
+  set(Status::Boot, true);
+}
+
+Status higherSeverity(Status currentStatus, Status candidate) {
+  return higher(currentStatus, candidate);
+}
+
+}
+
+static bool wifiInitOk = false;
+
+static bool thermalFaultActive() {
+  const float limit = settings.setpoint2_c + THERMAL_CRITICAL_MARGIN_C;
+  if (!isnan(state.temp1) && state.temp1 > limit) return true;
+  if (!isnan(state.temp2) && state.temp2 > limit) return true;
+  return false;
+}
+
+// Simple WS sequence counter for optional acks
 static uint32_t msg_seq = 1;
-static constexpr uint32_t WS_ACK_TIMEOUT_MS = 2000;
-static constexpr uint8_t WS_MAX_RETRIES = 3;
-static std::vector<PendingMsg> pending;
 
 // ---- Simple device log ring buffer ----
 static std::deque<String> logs;
@@ -86,15 +233,15 @@ static void addLog(const String& s) {
 }
 
 static void wsSendReliable(AsyncWebSocketClient* c, JsonDocument& doc) {
+  if (!c) return;
   doc["id"] = msg_seq++;
   String out;
   serializeJson(doc, out);
   c->text(out);
-  pending.push_back({(uint32_t)doc["id"].as<uint32_t>(), millis(), 1, out, c});
 }
 
 static void wsBroadcastState() {
-  StaticJsonDocument<768> doc;
+  StaticJsonDocument<1280> doc;
   doc["type"] = "state";
   auto data = doc.createNestedObject("data");
   if (isnan(state.temp1)) {
@@ -130,36 +277,17 @@ static void wsBroadcastState() {
   dsp["sub_hi_hp_hz"] = settings.dsp_sub_hi_hp_hz;
   dsp["sub_hi_lp_hz"] = settings.dsp_sub_hi_lp_hz;
 
+  auto sys = doc.createNestedObject("sys");
+  fillSystemInfo(sys);
+
   String out;
   serializeJson(doc, out);
   ws.textAll(out);
 }
 
-static void handleAck(uint32_t id) {
-  for (auto it = pending.begin(); it != pending.end(); ++it) {
-    if (it->id == id) { pending.erase(it); return; }
-  }
-}
+static void handleAck(uint32_t /*id*/) {}
 
-static void wsResendTick() {
-  const uint32_t now = millis();
-  for (auto it = pending.begin(); it != pending.end();) {
-    if (!it->client || !it->client->canSend()) { it = pending.erase(it); continue; }
-    if (now - it->sent_at_ms > WS_ACK_TIMEOUT_MS) {
-      if (it->attempts >= WS_MAX_RETRIES) {
-        // give up on this message
-        it = pending.erase(it);
-        continue;
-      }
-      it->attempts++;
-      it->sent_at_ms = now;
-      it->client->text(it->payload);
-      ++it;
-    } else {
-      ++it;
-    }
-  }
-}
+static void wsResendTick() {}
 
 // ---- WebSocket event handler ----
 static void onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
@@ -261,7 +389,7 @@ static void registerHttpRoutes() {
   server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
 
   server.on("/api/state", HTTP_GET, [](AsyncWebServerRequest* req){
-    StaticJsonDocument<768> doc;
+    StaticJsonDocument<1280> doc;
     if (isnan(state.temp1)) {
       doc["temp1"] = nullptr;
     } else {
@@ -290,6 +418,8 @@ static void registerHttpRoutes() {
     dsp["sub_lo_lp_hz"] = settings.dsp_sub_lo_lp_hz;
     dsp["sub_hi_hp_hz"] = settings.dsp_sub_hi_hp_hz;
     dsp["sub_hi_lp_hz"] = settings.dsp_sub_hi_lp_hz;
+    auto sys = doc.createNestedObject("sys");
+    fillSystemInfo(sys);
     String out; serializeJson(doc, out);
     req->send(200, "application/json", out);
   });
@@ -322,14 +452,15 @@ static void registerHttpRoutes() {
 }
 
 // ---- Setup helpers ----
-static void initWiFiAP() {
+static bool initWiFiAP() {
   WiFi.mode(WIFI_AP);
   bool ok = WiFi.softAP(AP_SSID); // Open AP (no password)
   if (!ok) {
     // Retry once quickly
     delay(500);
-    WiFi.softAP(AP_SSID);
+    ok = WiFi.softAP(AP_SSID);
   }
+  return ok;
 }
 
 // ---- Sensors & Control ----
@@ -346,6 +477,29 @@ static void sampleSensors() {
   state.temp1 = adcToTempC(a1);
   state.temp2 = adcToTempC(a2);
   // TODO: tach read via PCNT or RMT; set to 0 for now
+}
+
+static void fillSystemInfo(JsonObject obj) {
+  obj["uptime_ms"] = millis();
+  obj["free_heap"] = ESP.getFreeHeap();
+  obj["heap_size"] = ESP.getHeapSize();
+  obj["cpu_freq_mhz"] = ESP.getCpuFreqMHz();
+  obj["fw_version"] = FW_VERSION;
+  obj["fw_build"] = FW_BUILD;
+  obj["sdk"] = ESP.getSdkVersion();
+  obj["chip"] = CHIP_LABEL;
+  obj["chip_revision"] = ESP.getChipRevision();
+  obj["reset_reason"] = RESET_REASON_LABEL;
+  obj["boot_count"] = boot_count;
+  obj["wifi_clients"] = WiFi.softAPgetStationNum();
+  obj["ap_ip"] = WiFi.softAPIP().toString();
+  if (littlefs_ready) {
+    obj["fs_total"] = fs_total_bytes;
+    obj["fs_used"] = LittleFS.usedBytes();
+  } else {
+    obj["fs_total"] = 0;
+    obj["fs_used"] = 0;
+  }
 }
 
 static bool handleDspUpdate(JsonObject data) {
@@ -489,14 +643,58 @@ void setup() {
   delay(50);
   Serial.println("Booting BOOTBOXDSP controller...");
 
-  if (!LittleFS.begin(true)) {
+  StatusLed::init();
+
+  littlefs_ready = LittleFS.begin(true);
+  if (!littlefs_ready) {
     Serial.println("LittleFS mount failed");
+  } else {
+    fs_total_bytes = LittleFS.totalBytes();
   }
 
   prefs.begin("bootbox", false);
+  last_reset_reason = esp_reset_reason();
+  const char* rr = resetReasonToStr(last_reset_reason);
+  snprintf(RESET_REASON_LABEL, sizeof(RESET_REASON_LABEL), "%s", rr);
+  boot_count = prefs.getUInt("boot_cnt", 0) + 1;
+  prefs.putUInt("boot_cnt", boot_count);
+
+  const char* chip_model = ESP.getChipModel();
+  if (strncmp(chip_model, "ESP32", 5) == 0) {
+    snprintf(CHIP_LABEL, sizeof(CHIP_LABEL), "MCU%s", chip_model + 5);
+  } else {
+    snprintf(CHIP_LABEL, sizeof(CHIP_LABEL), "%s", chip_model);
+  }
+
+  addLog(String("reset reason: ") + RESET_REASON_LABEL);
+  addLog(String("boot count: ") + boot_count);
+
   settingsLoad(prefs, settings);
 
-  initWiFiAP();
+  StatusLed::setDefault(StatusLed::Status::SystemOk);
+  if (!littlefs_ready) {
+    StatusLed::setDefault(StatusLed::higherSeverity(StatusLed::getDefault(), StatusLed::Status::GeneralError));
+  }
+
+  wifiInitOk = initWiFiAP();
+  if (!wifiInitOk) {
+    Serial.println("WiFi AP startup failed");
+    StatusLed::setDefault(StatusLed::higherSeverity(StatusLed::getDefault(), StatusLed::Status::NetworkError));
+  }
+
+  switch (last_reset_reason) {
+    case ESP_RST_PANIC:
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT:
+      StatusLed::setDefault(StatusLed::higherSeverity(StatusLed::getDefault(), StatusLed::Status::SystemRunningCheckLogs));
+      break;
+    case ESP_RST_BROWNOUT:
+      StatusLed::setDefault(StatusLed::higherSeverity(StatusLed::getDefault(), StatusLed::Status::CriticalError));
+      break;
+    default:
+      break;
+  }
 
   // Fan PWM setup
   const int pwm_freq = (kFanType == FanType::Fan4Wire) ? FAN_PWM_FREQ_4WIRE : FAN_PWM_FREQ_3WIRE;
@@ -513,6 +711,7 @@ void setup() {
   Serial.print("AP IP: "); Serial.println(WiFi.softAPIP());
   addLog(String("fans active: ") + activeFanCount());
   addLog("system boot");
+  StatusLed::set(StatusLed::getDefault(), true);
 }
 
 void loop() {
@@ -535,5 +734,30 @@ void loop() {
   if (now - last_bcast > 1000) {
     wsBroadcastState();
     last_bcast = now;
+  }
+
+  StatusLed::Status desired = StatusLed::getDefault();
+  if (!littlefs_ready) desired = StatusLed::higherSeverity(desired, StatusLed::Status::GeneralError);
+  if (!wifiInitOk) desired = StatusLed::higherSeverity(desired, StatusLed::Status::NetworkError);
+  if (thermalFaultActive()) desired = StatusLed::higherSeverity(desired, StatusLed::Status::ThermalError);
+  StatusLed::set(desired);
+  StatusLed::update();
+}
+
+static const char* resetReasonToStr(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON: return "power_on";
+    case ESP_RST_EXT: return "ext_reset";
+    case ESP_RST_SW: return "sw_reset";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: return "int_wdt";
+    case ESP_RST_TASK_WDT: return "task_wdt";
+    case ESP_RST_WDT: return "watchdog";
+    case ESP_RST_DEEPSLEEP: return "deep_sleep";
+    case ESP_RST_BROWNOUT: return "brown_out";
+    case ESP_RST_SDIO: return "sdio";
+    case ESP_RST_USB: return "usb";
+    case ESP_RST_JTAG: return "jtag";
+    default: return "unknown";
   }
 }
