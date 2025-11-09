@@ -44,6 +44,8 @@ PORT=/dev/ttyUSB0 ARDUINO_CLI_CONFIG=./arduino-cli.yaml tools/arduino-upload.sh 
 
 `arduino-upload.sh` rebuilds by default; add `--no-build` to reuse existing artifacts. The script flashes every segment listed in `flash-manifest.json`, so the web UI is always deployed alongside the firmware.
 
+> Tip: CP2102 USB bridges usually enumerate as `/dev/ttyUSB0`, while CH34x sometimes appear as `/dev/ttyUSB1`. Use `ls /dev/ttyUSB*` or `dmesg | tail` after plugging in to confirm.
+
 ## Serial Monitor (optional)
 
 ```
@@ -57,3 +59,24 @@ PORT=/dev/ttyUSB0 tools/arduino-monitor.sh
 ## Notes
 - If LittleFS mount fails, check the Partition Scheme and ensure a LittleFS (or SPIFFS on older cores) partition is available.
 - If build errors mention missing libraries, re-run `tools/arduino-libs.sh` or install via Arduino IDE Library Manager.
+- Thermistor defaults live in `config.h`; after flashing you can fine-tune using the System tab calibration wizard, which writes curves to NVS without rebuilding.
+
+## Release Checklist
+1. Ensure `main` is clean and tests/build succeed.
+2. Run `tools/arduino-build.sh --config-file arduino-cli.yaml --build-path .arduino-build` to generate fresh artifacts.
+3. Package the files you want to ship (commonly:
+   - `bootbox_mcu_fw.unified.bin`
+   - `bootbox_mcu_fw.ino.bin`
+   - `bootbox_mcu_fw.spiffs.bin`
+   - `flash-manifest.json`
+   - `bootbox_mcu_fw.ino.partitions.bin`
+   ).
+4. Tag the commit (`git tag 0.x.y && git push --tags`) and create the GitHub release:
+
+```
+gh release create 0.x.y dist/bootbox-mcu-fw-0.x.y.zip \
+  --title "Release 0.x.y" \
+  --notes-file docs/release-notes-0.x.y.md
+```
+
+5. Verify the release archive downloads and flashes via `tools/arduino-upload.sh --input-dir`.

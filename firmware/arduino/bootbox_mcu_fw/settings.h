@@ -1,6 +1,8 @@
 #pragma once
 #include <Preferences.h>
 
+#include "config.h"
+
 struct Settings {
   bool pid_enabled = true;
   float setpoint1_c = 45.0f;
@@ -23,6 +25,16 @@ struct Settings {
   float dsp_sub_lo_lp_hz = 80.0f;
   float dsp_sub_hi_hp_hz = 70.0f;
   float dsp_sub_hi_lp_hz = 160.0f;
+
+  struct ThermCal {
+    bool valid = false;
+    float nominal_ohms = 0.0f;
+    float beta = 0.0f;
+  };
+  ThermCal thermistors[2] = {
+    {false, THERMISTOR1_PARAMS.nominal_resistance_ohms, THERMISTOR1_PARAMS.beta_coefficient},
+    {false, THERMISTOR2_PARAMS.nominal_resistance_ohms, THERMISTOR2_PARAMS.beta_coefficient}
+  };
 };
 
 inline void settingsLoad(Preferences& prefs, Settings& s) {
@@ -45,6 +57,15 @@ inline void settingsLoad(Preferences& prefs, Settings& s) {
   s.dsp_sub_lo_lp_hz = prefs.getFloat("dspLL", s.dsp_sub_lo_lp_hz);
   s.dsp_sub_hi_hp_hz = prefs.getFloat("dspHH", s.dsp_sub_hi_hp_hz);
   s.dsp_sub_hi_lp_hz = prefs.getFloat("dspHL", s.dsp_sub_hi_lp_hz);
+
+  const char* thermValidKeys[2] = {"tc0v", "tc1v"};
+  const char* thermNomKeys[2] = {"tc0n", "tc1n"};
+  const char* thermBetaKeys[2] = {"tc0b", "tc1b"};
+  for (int i = 0; i < 2; ++i) {
+    s.thermistors[i].valid = prefs.getBool(thermValidKeys[i], s.thermistors[i].valid);
+    s.thermistors[i].nominal_ohms = prefs.getFloat(thermNomKeys[i], s.thermistors[i].nominal_ohms);
+    s.thermistors[i].beta = prefs.getFloat(thermBetaKeys[i], s.thermistors[i].beta);
+  }
 }
 
 inline void settingsSave(Preferences& prefs, const Settings& s) {
@@ -67,4 +88,13 @@ inline void settingsSave(Preferences& prefs, const Settings& s) {
   prefs.putFloat("dspLL", s.dsp_sub_lo_lp_hz);
   prefs.putFloat("dspHH", s.dsp_sub_hi_hp_hz);
   prefs.putFloat("dspHL", s.dsp_sub_hi_lp_hz);
+
+  const char* thermValidKeys[2] = {"tc0v", "tc1v"};
+  const char* thermNomKeys[2] = {"tc0n", "tc1n"};
+  const char* thermBetaKeys[2] = {"tc0b", "tc1b"};
+  for (int i = 0; i < 2; ++i) {
+    prefs.putBool(thermValidKeys[i], s.thermistors[i].valid);
+    prefs.putFloat(thermNomKeys[i], s.thermistors[i].nominal_ohms);
+    prefs.putFloat(thermBetaKeys[i], s.thermistors[i].beta);
+  }
 }

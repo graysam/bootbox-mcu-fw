@@ -272,3 +272,50 @@ Prompt: so lets make a few tweaks before committing this version and harnessing 
   - Wired GPIO2 (builtin LED) into the firmware with reusable pattern definitions for Boot, System OK, Check Logs, General/Thermal/Network errors, plus placeholder Bluetooth/DSP states. Patterns use distinctive Morse-style flashes per requirement.
   - Status is derived from boot diagnostics (reset reason, storage/AP availability) with dynamic overrides for thermal alarms; future DSP/Bluetooth hooks can call `setLedStatus` once those subsystems land.
   - Added open-loop helper to tick the LED without blocking and documented defaults (System OK steady flash, panic resets drive “Check Logs”, thermal faults override with triple-pulse).
+Prompt: still not quite right - for probe 2, the dashboard is giving 34.8c but my IR therm reads 18.4c
+- firmware/arduino/bootbox_mcu_fw/config.h
+  - Updated channel 2 thermistor configuration to reflect the ~180 kΩ series resistor paired with the 100 kΩ probe, yielding accurate ambient conversion.
+  - Added optional thermistor debug logging constants to keep calibration prints behind a compile-time switch.
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
+  - Wrapped periodic Serial calibration prints behind the new debug guard so production builds stay quiet while keeping the helper available.
+- Build & verification
+  - Rebuilt unified firmware + SPIFFS image, flashed to `/dev/ttyUSB0`, and confirmed `/api/state` now reports `temp2≈21.7°C` for the measured 20.8°C probe.
+Prompt: is there a way to add a thermistor calibration utility into the system page? perhaps a utility which approximates the temp curve by guiding the user to hold the thermistor to be calibrated at a known high temperature, then a known low temp? say, boiling water, and refrigerated water? the curve can then be stored to NVS? also, I note in this latest build that the status LED is no longer lighting. if we can also disable the temperature debug serial logging for now too.
+- firmware/arduino/bootbox_mcu_fw/config.h
+  - Added status LED pin/polarity configuration and documented defaults for the onboard indicator.
+  - Kept thermistor debug logging disabled by default for quiet serial output.
+- firmware/arduino/bootbox_mcu_fw/settings.h
+  - Persist thermistor calibration data (nominal resistance, beta, valid flag) for both channels in NVS.
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
+  - Switched Status LED logic to use configurable polarity, refreshed thermistor runtime parameters, and gated debug logs.
+  - Implemented thermistor calibration workflow with averaged ADC sampling, two-point curve solve, NVS persistence, and AsyncJSON HTTP endpoints.
+  - Extended system telemetry payloads with thermistor metadata and active calibration session status.
+- firmware/arduino/bootbox_mcu_fw/data/index.html
+  - Added a System-tab calibration card with channel selector, capture controls, and a summary table.
+  - Introduced supporting layout/styles for calibration workflow messaging and table output.
+- firmware/arduino/bootbox_mcu_fw/data/app.js
+  - Wired new calibration UI: state tracking, button enablement, API orchestration, and table/session rendering.
+  - Fetched calibration status on load and integrated thermistor data into the existing system telemetry updater.
+- Build & verification
+  - `./tools/arduino-build.sh --config-file arduino-cli.yaml`
+  - `PORT=/dev/ttyUSB0 ./tools/arduino-upload.sh --no-build --config-file arduino-cli.yaml`
+  - `curl http://192.168.4.1/api/state` and exercised `/api/therm/calibration` actions (start/capture/cancel) to confirm firmware/UI state updates.
+Prompt: can you please commit everything to main on github and round out the documentation making sure it is all up to date, including starting the Wiki on github with at least stubs for all topics we intend to cover on there. please upload an archive to releases on github as release 0.1, then we will get into building out the ADAU DSP interaction feature set in earnest.
+- README.md
+  - Documented thermistor calibration workflow, status LED codes, updated feature list/HTTP endpoints, and added release packaging guidance.
+- docs/BUILD.md
+  - Added CP2102 note, thermistor calibration reminder, and a step-by-step release checklist including `gh release create` usage.
+- docs/wiki/
+  - Seeded wiki stub pages (Home, Hardware, Firmware, Web-UI, DSP Control roadmap, Thermistor calibration, Build & Flash, Release process, Troubleshooting) ready to sync once GitHub wiki cloning is permitted.
+- firmware/arduino/bootbox_mcu_fw/config.h
+  - Confirmed 3-wire fan config and documented dual 10k NTC parameters for the new hardware.
+- firmware/arduino/bootbox_mcu_fw/settings.h
+  - (Previously added) thermistor calibration persistence retained; no additional delta beyond staged work.
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
+  - (Previously added) thermistor calibration backend retained; verified with new config.
+- firmware/arduino/bootbox_mcu_fw/data/index.html & data/app.js
+  - (Previously added) calibration UI kept intact; no extra functional edits beyond doc alignment.
+- docs/wiki note
+  - Unable to push to `bootbox-mcu-fw.wiki.git` (GitHub still returns 404) so included markdown locally and documented the blocker for follow-up.
+- Release artifacts
+  - Rebuilt with `tools/arduino-build.sh --config-file arduino-cli.yaml` ready for packaging/upload after commit.

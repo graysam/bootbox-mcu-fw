@@ -4,6 +4,7 @@
 #include <Preferences.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
+#include <AsyncJson.h>
 #include <ArduinoJson.h>
 #include <esp32-hal-ledc.h>
 #include <esp_system.h>
@@ -34,6 +35,8 @@ struct RuntimeState {
 RuntimeState state;
 Settings settings;
 Preferences prefs;
+
+static ThermistorParams thermistor_params[2] = {THERMISTOR1_PARAMS, THERMISTOR2_PARAMS};
 
 static constexpr size_t FAN_SLOT_COUNT = sizeof(FAN_CTRL_PINS) / sizeof(FAN_CTRL_PINS[0]);
 static const char FW_VERSION[] = "dev";
@@ -74,6 +77,21 @@ static inline void markSettingsDirty() {
 static void fillSystemInfo(JsonObject obj);
 static bool handleDspUpdate(JsonObject data);
 static const char* resetReasonToStr(esp_reset_reason_t reason);
+static void refreshThermistorParams();
+static AsyncJsonResponse* createThermStatusResponse(bool ok, const String& message, int statusCode = 200);
+
+struct ThermCalSession {
+  bool active = false;
+  uint8_t channel = 0; // 0-based
+  bool has_low = false;
+  bool has_high = false;
+  float low_actual_c = NAN;
+  float high_actual_c = NAN;
+  int low_adc = 0;
+  int high_adc = 0;
+};
+
+static ThermCalSession therm_cal_session;
 
 static constexpr float THERMAL_CRITICAL_MARGIN_C = 12.0f;
 
@@ -102,8 +120,8 @@ enum class Status : uint8_t {
   CriticalError
 };
 
-static constexpr int PIN = 2;
-static constexpr bool ACTIVE_HIGH = true;
+static constexpr int PIN = STATUS_LED_PIN;
+static constexpr bool ACTIVE_HIGH = STATUS_LED_ACTIVE_HIGH;
 
 static const Step PATTERN_BOOT[] = {{100, 1}, {100, 0}};
 static const Step PATTERN_OK[] = {{50, 1}, {1950, 0}};
@@ -216,8 +234,8 @@ static bool wifiInitOk = false;
 
 static bool thermalFaultActive() {
   const float limit = settings.setpoint2_c + THERMAL_CRITICAL_MARGIN_C;
-  if (!isnan(state.temp1) && state.temp1 > limit) return true;
-  if (!isnan(state.temp2) && state.temp2 > limit) return true;
+  if (!std::isnan(state.temp1) && state.temp1 > limit) return true;
+  if (!std::isnan(state.temp2) && state.temp2 > limit) return true;
   return false;
 }
 
@@ -440,7 +458,205 @@ static void registerHttpRoutes() {
               }
               if (f) f.write(data, len);
               if (final && f) { f.close(); addLog(String("upload done ") + filename); }
-            });
+  });
+
+  server.on("/api/therm/calibration", HTTP_GET, [](AsyncWebServerRequest* req){
+    auto* resp = createThermStatusResponse(true, "");
+    req->send(resp);
+  });
+
+  auto* thermHandler = new AsyncCallbackJsonWebHandler("/api/therm/calibration",
+    [](AsyncWebServerRequest* req, JsonVariant& json) {
+      if (!json.is<JsonObject>()) {
+        auto* resp = createThermStatusResponse(false, "invalid_payload", 400);
+        req->send(resp);
+        return;
+      }
+
+      JsonObject obj = json.as<JsonObject>();
+      const char* action = obj["action"] | "";
+      if (!action || action[0] == '\0') {
+        auto* resp = createThermStatusResponse(false, "missing_action", 400);
+        req->send(resp);
+        return;
+      }
+
+      int channel = obj.containsKey("channel") ? obj["channel"].as<int>() :
+                    (therm_cal_session.active ? static_cast<int>(therm_cal_session.channel + 1) : 1);
+      if (channel < 1 || channel > 2) {
+        auto* resp = createThermStatusResponse(false, "invalid_channel", 400);
+        req->send(resp);
+        return;
+      }
+      const size_t idx = static_cast<size_t>(channel - 1);
+      auto sendError = [&](const String& msg, int code = 400) {
+        auto* resp = createThermStatusResponse(false, msg, code);
+        req->send(resp);
+      };
+
+      if (strcmp(action, "start") == 0) {
+        therm_cal_session = {};
+        therm_cal_session.active = true;
+        therm_cal_session.channel = static_cast<uint8_t>(idx);
+        addLog(String("therm") + channel + " calibration start");
+        auto* resp = createThermStatusResponse(true, String("Calibration started for channel ") + channel);
+        req->send(resp);
+        wsBroadcastState();
+        return;
+      }
+
+      if (strcmp(action, "cancel") == 0) {
+        if (therm_cal_session.active && therm_cal_session.channel == idx) {
+          therm_cal_session = {};
+        }
+        auto* resp = createThermStatusResponse(true, "Calibration session cancelled");
+        req->send(resp);
+        wsBroadcastState();
+        return;
+      }
+
+      if (strcmp(action, "status") == 0) {
+        auto* resp = createThermStatusResponse(true, "");
+        req->send(resp);
+        return;
+      }
+
+      if (strcmp(action, "capture") == 0) {
+        if (!(therm_cal_session.active && therm_cal_session.channel == idx)) {
+          sendError("no_active_session");
+          return;
+        }
+        const char* point = obj["point"] | "";
+        if (!point || point[0] == '\0') {
+          sendError("missing_point");
+          return;
+        }
+        bool is_low = strcmp(point, "low") == 0;
+        bool is_high = strcmp(point, "high") == 0;
+        if (!is_low && !is_high) {
+          sendError("point_must_be_low_or_high");
+          return;
+        }
+        if (!obj.containsKey("actual_c")) {
+          sendError("missing_actual_c");
+          return;
+        }
+        float actual_c = obj["actual_c"].as<float>();
+        if (!std::isfinite(actual_c)) {
+          sendError("invalid_actual_c");
+          return;
+        }
+        int adc = readThermAdc(static_cast<uint8_t>(idx));
+        if (adc < 0) {
+          sendError("adc_unavailable");
+          return;
+        }
+        if (is_low) {
+          therm_cal_session.has_low = true;
+          therm_cal_session.low_actual_c = actual_c;
+          therm_cal_session.low_adc = adc;
+        } else {
+          therm_cal_session.has_high = true;
+          therm_cal_session.high_actual_c = actual_c;
+          therm_cal_session.high_adc = adc;
+        }
+        auto* resp = createThermStatusResponse(true,
+          String("Captured ") + point + " point for channel " + channel +
+          String(" (ADC ") + adc + ")");
+        req->send(resp);
+        wsBroadcastState();
+        return;
+      }
+
+      if (strcmp(action, "solve") == 0) {
+        if (!(therm_cal_session.active && therm_cal_session.channel == idx)) {
+          sendError("no_active_session");
+          return;
+        }
+        if (!therm_cal_session.has_low || !therm_cal_session.has_high) {
+          sendError("need_low_and_high_points");
+          return;
+        }
+        const auto& base = baseThermParams(idx);
+        float nominal_c = base.nominal_temperature_c;
+        if (obj.containsKey("nominal_c")) {
+          float candidate = obj["nominal_c"].as<float>();
+          if (std::isfinite(candidate)) nominal_c = candidate;
+        }
+        const float t_low_k = therm_cal_session.low_actual_c + 273.15f;
+        const float t_high_k = therm_cal_session.high_actual_c + 273.15f;
+        const float t_nom_k = nominal_c + 273.15f;
+        if (t_low_k <= 0.0f || t_high_k <= 0.0f || t_nom_k <= 0.0f) {
+          sendError("invalid_temperature_values");
+          return;
+        }
+        if (fabsf(t_low_k - t_high_k) < 0.05f) {
+          sendError("points_too_close");
+          return;
+        }
+        float r_low = adcToResistance(therm_cal_session.low_adc, base.series_resistance_ohms);
+        float r_high = adcToResistance(therm_cal_session.high_adc, base.series_resistance_ohms);
+        if (!std::isfinite(r_low) || !std::isfinite(r_high) || r_low <= 0.0f || r_high <= 0.0f) {
+          sendError("invalid_adc_samples");
+          return;
+        }
+        const float ln_ratio = logf(r_low / r_high);
+        const float inv_delta = (1.0f / t_low_k) - (1.0f / t_high_k);
+        if (!std::isfinite(ln_ratio) || fabsf(inv_delta) < 1e-8f) {
+          sendError("calculation_error");
+          return;
+        }
+        const float beta = ln_ratio / inv_delta;
+        if (!std::isfinite(beta) || beta <= 0.0f) {
+          sendError("beta_invalid");
+          return;
+        }
+        const float exponent = beta * ((1.0f / t_low_k) - (1.0f / t_nom_k));
+        const float r_nom = r_low * expf(exponent);
+        if (!std::isfinite(r_nom) || r_nom <= 0.0f) {
+          sendError("nominal_invalid");
+          return;
+        }
+
+        settings.thermistors[idx].valid = true;
+        settings.thermistors[idx].nominal_ohms = r_nom;
+        settings.thermistors[idx].beta = beta;
+        markSettingsDirty();
+        refreshThermistorParams();
+        therm_cal_session = {};
+        addLog(String("therm") + channel + " calibration saved");
+        wsBroadcastState();
+
+        auto* resp = createThermStatusResponse(true, "Calibration solved");
+        JsonObject root = resp->getRoot();
+        auto cal = root.createNestedObject("calibration");
+        cal["channel"] = channel;
+        cal["nominal_ohms"] = r_nom;
+        cal["beta"] = beta;
+        cal["nominal_c"] = nominal_c;
+        req->send(resp);
+        return;
+      }
+
+      if (strcmp(action, "clear") == 0) {
+        const auto& base = baseThermParams(idx);
+        settings.thermistors[idx].valid = false;
+        settings.thermistors[idx].nominal_ohms = base.nominal_resistance_ohms;
+        settings.thermistors[idx].beta = base.beta_coefficient;
+        refreshThermistorParams();
+        markSettingsDirty();
+        if (therm_cal_session.active && therm_cal_session.channel == idx) therm_cal_session = {};
+        addLog(String("therm") + channel + " calibration cleared");
+        wsBroadcastState();
+        auto* resp = createThermStatusResponse(true, String("Calibration cleared for channel ") + channel);
+        req->send(resp);
+        return;
+      }
+
+      sendError("unknown_action");
+      return;
+    });
+  server.addHandler(thermHandler);
 
   server.on("/api/logs", HTTP_GET, [](AsyncWebServerRequest* req){
     StaticJsonDocument<2048> out;
@@ -464,19 +680,110 @@ static bool initWiFiAP() {
 }
 
 // ---- Sensors & Control ----
-static float adcToTempC(int adc) {
-  // Placeholder: map raw ADC to degrees C. Replace with NTC curve.
-  // For now, simulate ~25-80C range over 0..4095
-  return TEMP_MIN_C + (adc / 4095.0f) * TEMP_SPAN_C;
+static const ThermistorParams& baseThermParams(size_t idx) {
+  return (idx == 0) ? THERMISTOR1_PARAMS : THERMISTOR2_PARAMS;
+}
+
+static void refreshThermistorParams() {
+  for (size_t i = 0; i < 2; ++i) {
+    thermistor_params[i] = baseThermParams(i);
+    if (settings.thermistors[i].valid) {
+      thermistor_params[i].nominal_resistance_ohms = settings.thermistors[i].nominal_ohms;
+      thermistor_params[i].beta_coefficient = settings.thermistors[i].beta;
+    }
+  }
+}
+
+static float adcToResistance(int adc, float series_resistance) {
+  if (adc <= 0 || adc >= ADC_FULL_SCALE) return NAN;
+  const float adc_f = static_cast<float>(adc);
+  const float denom = (ADC_FULL_SCALE - adc_f);
+  if (denom <= 0.0f) return NAN;
+  const float ratio = adc_f / denom;
+  if (ratio <= 0.0f) return NAN;
+  return series_resistance * ratio;
+}
+
+static int readThermAdc(uint8_t channel) {
+  const int pin = (channel == 0) ? PIN_THERM1 : PIN_THERM2;
+  if (pin < 0) return -1;
+  constexpr uint8_t samples = 12;
+  uint32_t acc = 0;
+  for (uint8_t i = 0; i < samples; ++i) {
+    acc += analogRead(pin);
+    delayMicroseconds(150);
+  }
+  return static_cast<int>(acc / samples);
+}
+
+static float thermistorAdcToC(int adc, const ThermistorParams& params) {
+  if (adc <= 0 || adc >= ADC_FULL_SCALE) return NAN;
+  const float adc_f = static_cast<float>(adc);
+  const float ratio = adc_f / (ADC_FULL_SCALE - adc_f);
+  if (ratio <= 0.0f) return NAN;
+  const float resistance = params.series_resistance_ohms * ratio;
+  if (resistance <= 0.0f || params.nominal_resistance_ohms <= 0.0f || params.beta_coefficient <= 0.0f) return NAN;
+
+  const float ln_ratio = std::log(resistance / params.nominal_resistance_ohms);
+  const float inverse_T = (1.0f / (params.nominal_temperature_c + 273.15f)) + (ln_ratio / params.beta_coefficient);
+  if (inverse_T <= 0.0f) return NAN;
+  const float temperature_k = 1.0f / inverse_T;
+  return temperature_k - 273.15f;
 }
 
 static void sampleSensors() {
   // Read analog temps; if pins unconnected, values may float
   int a1 = analogRead(PIN_THERM1);
   int a2 = analogRead(PIN_THERM2);
-  state.temp1 = adcToTempC(a1);
-  state.temp2 = adcToTempC(a2);
+  state.temp1 = thermistorAdcToC(a1, thermistor_params[0]);
+  state.temp2 = thermistorAdcToC(a2, thermistor_params[1]);
   // TODO: tach read via PCNT or RMT; set to 0 for now
+  if (THERMISTOR_DEBUG_LOG) {
+    static uint32_t last_report = 0;
+    const uint32_t now = millis();
+    if (now - last_report > THERMISTOR_DEBUG_INTERVAL_MS) {
+      last_report = now;
+      Serial.printf("Therm ADC: ch1=%d temp=%.2fC, ch2=%d temp=%.2fC\n", a1, state.temp1, a2, state.temp2);
+    }
+  }
+}
+
+static void populateThermStatus(JsonObject obj) {
+  auto therms = obj.createNestedArray("thermistors");
+  for (size_t i = 0; i < 2; ++i) {
+    const auto& base = baseThermParams(i);
+    const bool calibrated = settings.thermistors[i].valid;
+    auto therm = therms.createNestedObject();
+    therm["channel"] = static_cast<uint8_t>(i + 1);
+    therm["series_ohms"] = base.series_resistance_ohms;
+    therm["nominal_ohms"] = calibrated ? settings.thermistors[i].nominal_ohms : base.nominal_resistance_ohms;
+    therm["beta"] = calibrated ? settings.thermistors[i].beta : base.beta_coefficient;
+    therm["default_nominal_ohms"] = base.nominal_resistance_ohms;
+    therm["default_beta"] = base.beta_coefficient;
+    therm["calibrated"] = calibrated;
+  }
+
+  auto session = obj.createNestedObject("therm_cal_session");
+  session["active"] = therm_cal_session.active;
+  if (therm_cal_session.active) {
+    session["channel"] = static_cast<uint8_t>(therm_cal_session.channel + 1);
+    session["has_low"] = therm_cal_session.has_low;
+    session["has_high"] = therm_cal_session.has_high;
+    if (therm_cal_session.has_low) {
+      session["low_actual_c"] = therm_cal_session.low_actual_c;
+      session["low_adc"] = therm_cal_session.low_adc;
+    } else {
+      session["low_actual_c"] = nullptr;
+      session["low_adc"] = nullptr;
+    }
+    if (therm_cal_session.has_high) {
+      session["high_actual_c"] = therm_cal_session.high_actual_c;
+      session["high_adc"] = therm_cal_session.high_adc;
+    } else {
+      session["high_actual_c"] = nullptr;
+      session["high_adc"] = nullptr;
+    }
+  }
 }
 
 static void fillSystemInfo(JsonObject obj) {
@@ -500,6 +807,18 @@ static void fillSystemInfo(JsonObject obj) {
     obj["fs_total"] = 0;
     obj["fs_used"] = 0;
   }
+  populateThermStatus(obj);
+}
+
+static AsyncJsonResponse* createThermStatusResponse(bool ok, const String& message, int statusCode) {
+  auto* resp = new AsyncJsonResponse(false, 1024);
+  resp->setCode(statusCode);
+  JsonObject root = resp->getRoot();
+  root["ok"] = ok;
+  if (message.length() > 0) root["message"] = message;
+  populateThermStatus(root);
+  resp->setLength();
+  return resp;
 }
 
 static bool handleDspUpdate(JsonObject data) {
@@ -670,6 +989,7 @@ void setup() {
   addLog(String("boot count: ") + boot_count);
 
   settingsLoad(prefs, settings);
+  refreshThermistorParams();
 
   StatusLed::setDefault(StatusLed::Status::SystemOk);
   if (!littlefs_ready) {

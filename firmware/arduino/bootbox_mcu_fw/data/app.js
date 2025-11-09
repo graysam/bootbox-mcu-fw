@@ -49,21 +49,39 @@ const S = {
   sysChip: $('sys-chip'),
   sysIp: $('sys-ip'),
   sysReset: $('sys-reset'),
-  sysBoot: $('sys-boot')
+  sysBoot: $('sys-boot'),
+  thermChannel: $('therm-channel'),
+  thermLow: $('therm-low'),
+  thermHigh: $('therm-high'),
+  thermNominal: $('therm-nominal'),
+  thermStart: $('therm-start'),
+  thermCaptureLow: $('therm-capture-low'),
+  thermCaptureHigh: $('therm-capture-high'),
+  thermSolve: $('therm-solve'),
+  thermCancel: $('therm-cancel'),
+  thermClear: $('therm-clear'),
+  thermMessage: $('therm-message'),
+  thermSession: $('therm-session'),
+  thermTableBody: $('therm-table-body')
 };
 
   const stateCache = {
     fanCount: 1,
     pidEnabled: true,
     manualPct: 30,
-    awaitingApply: false,
-    modeDirty: false,
-    manualDirty: false,
-    appliedPid: true,
-    appliedManualPct: 30,
-    dsp: {},
-    sys: {}
-  };
+  awaitingApply: false,
+  modeDirty: false,
+  manualDirty: false,
+  appliedPid: true,
+  appliedManualPct: 30,
+  dsp: {},
+  sys: {},
+  therm: {
+    calibrations: [],
+    session: {}
+  }
+};
+  let thermBusy = false;
 
   const DSP_META = {
     master_db: { unit: 'dB', decimals: 1, min: -60, max: 12, step: 0.5 },
@@ -189,6 +207,163 @@ const S = {
     if (minutes && parts.length < 3) parts.push(`${minutes}m`);
     if (parts.length < 2) parts.push(`${seconds}s`);
     return parts.join(' ');
+  }
+
+  function formatResistance(ohms) {
+    if (!Number.isFinite(ohms) || ohms <= 0) return '—';
+    const units = ['Ω', 'kΩ', 'MΩ'];
+    let value = ohms;
+    let idx = 0;
+    while (value >= 1000 && idx < units.length - 1) {
+      value /= 1000;
+      idx++;
+    }
+    const decimals = value < 10 ? 2 : value < 100 ? 1 : 0;
+    return `${value.toFixed(decimals)} ${units[idx]}`;
+  }
+
+  function storeThermState(calibrations, session) {
+    if (Array.isArray(calibrations)) {
+      stateCache.therm.calibrations = calibrations.map((item) => {
+        const copy = { ...item };
+        if (copy.channel != null) copy.channel = Number(copy.channel);
+        if (copy.nominal_ohms != null) copy.nominal_ohms = Number(copy.nominal_ohms);
+        if (copy.beta != null) copy.beta = Number(copy.beta);
+        if (copy.series_ohms != null) copy.series_ohms = Number(copy.series_ohms);
+        copy.calibrated = !!copy.calibrated;
+        return copy;
+      });
+    }
+    if (session && typeof session === 'object') {
+      const copy = { ...session };
+      if (copy.channel != null) copy.channel = Number(copy.channel);
+      copy.has_low = !!copy.has_low;
+      copy.has_high = !!copy.has_high;
+      if (copy.low_actual_c != null) copy.low_actual_c = Number(copy.low_actual_c);
+      if (copy.high_actual_c != null) copy.high_actual_c = Number(copy.high_actual_c);
+      if (copy.low_adc != null) copy.low_adc = Number(copy.low_adc);
+      if (copy.high_adc != null) copy.high_adc = Number(copy.high_adc);
+      copy.active = !!copy.active;
+      stateCache.therm.session = copy;
+    }
+  }
+
+  function showThermMessage(text, variant = '') {
+    if (!S.thermMessage) return;
+    S.thermMessage.textContent = text;
+    S.thermMessage.classList.remove('success', 'error', 'pending');
+    if (variant) S.thermMessage.classList.add(variant);
+  }
+
+  function renderThermTable(calibrations = []) {
+    if (!S.thermTableBody) return;
+    if (!Array.isArray(calibrations) || !calibrations.length) {
+      S.thermTableBody.innerHTML = '<tr><td colspan="5">Awaiting data…</td></tr>';
+      return;
+    }
+    const rows = calibrations.map((therm) => {
+      const channel = therm.channel ?? '?';
+      const status = therm.calibrated ? 'Calibrated' : 'Default';
+      const nominal = formatResistance(therm.nominal_ohms);
+      const beta = Number.isFinite(therm.beta) ? therm.beta.toFixed(0) : '—';
+      const series = formatResistance(therm.series_ohms);
+      return `<tr>
+        <td>${channel}</td>
+        <td class="status">${status}</td>
+        <td>${nominal}</td>
+        <td>${beta}</td>
+        <td>${series}</td>
+      </tr>`;
+    });
+    S.thermTableBody.innerHTML = rows.join('');
+  }
+
+  function renderThermSession(session = {}) {
+    if (!S.thermSession) return;
+    if (!session.active) {
+      S.thermSession.textContent = 'No calibration session in progress.';
+      return;
+    }
+    const channel = session.channel ?? '?';
+    const lowStr = session.has_low && Number.isFinite(session.low_actual_c)
+      ? `${session.low_actual_c.toFixed(1)}°C (ADC ${session.low_adc ?? '—'})`
+      : 'pending';
+    const highStr = session.has_high && Number.isFinite(session.high_actual_c)
+      ? `${session.high_actual_c.toFixed(1)}°C (ADC ${session.high_adc ?? '—'})`
+      : 'pending';
+    const ready = session.has_low && session.has_high ? 'Ready to solve.' : 'Capture remaining reference(s).';
+    S.thermSession.textContent = `Session active on channel ${channel}: low ${lowStr}, high ${highStr}. ${ready}`;
+  }
+
+  function updateThermButtons() {
+    if (!S.thermChannel) return;
+    const selected = Number.parseInt(S.thermChannel.value, 10) || 1;
+    const session = stateCache.therm.session || {};
+    const active = !!session.active && session.channel === selected;
+    const hasLow = !!session.has_low;
+    const hasHigh = !!session.has_high;
+    const disabled = thermBusy;
+    if (S.thermStart) S.thermStart.disabled = disabled;
+    if (S.thermCaptureLow) S.thermCaptureLow.disabled = disabled || !active;
+    if (S.thermCaptureHigh) S.thermCaptureHigh.disabled = disabled || !active;
+    if (S.thermSolve) S.thermSolve.disabled = disabled || !active || !hasLow || !hasHigh;
+    if (S.thermCancel) S.thermCancel.disabled = disabled || !active;
+    if (S.thermClear) S.thermClear.disabled = disabled;
+  }
+
+  function refreshThermUI() {
+    renderThermTable(stateCache.therm.calibrations);
+    renderThermSession(stateCache.therm.session);
+    updateThermButtons();
+  }
+
+  function handleThermResponse(payload) {
+    if (!payload || typeof payload !== 'object') {
+      showThermMessage('Controller returned no data', 'error');
+      return;
+    }
+    storeThermState(payload.thermistors, payload.therm_cal_session);
+    refreshThermUI();
+    if (payload.calibration) {
+      const cal = payload.calibration;
+      showToast(`Channel ${cal.channel} solved: β ${Number(cal.beta).toFixed(0)}, nominal ${formatResistance(cal.nominal_ohms)}`, 'success', 2600);
+    }
+    if (payload.message) {
+      showThermMessage(payload.message, payload.ok === false ? 'error' : 'success');
+    } else if (payload.ok === false) {
+      showThermMessage('Calibration action failed', 'error');
+    } else {
+      showThermMessage('Calibration status updated');
+    }
+  }
+
+  async function sendThermAction(action, extra = {}) {
+    if (!S.thermChannel || thermBusy) return;
+    const channel = Number.parseInt(S.thermChannel.value, 10) || 1;
+    const body = { action, channel, ...extra };
+    thermBusy = true;
+    updateThermButtons();
+    try {
+      const res = await fetch('/api/therm/calibration', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      handleThermResponse(data);
+      if (!res.ok || data.ok === false) {
+        showToast(data.message || `Calibration ${action} failed`, 'error', 3200);
+      } else if (data.message) {
+        showToast(data.message, 'success', 2200);
+      }
+    } catch (err) {
+      const msg = err && err.message ? err.message : 'Calibration request failed';
+      showThermMessage(msg, 'error');
+      showToast(`Calibration ${action} failed: ${msg}`, 'error', 3200);
+    } finally {
+      thermBusy = false;
+      updateThermButtons();
+    }
   }
 
   function queueDspUpdate(param, value, immediate = false) {
@@ -356,6 +531,11 @@ const S = {
         S.sysFs.textContent = '—';
         S.sysFsHint.textContent = 'Filesystem not mounted';
       }
+    }
+
+    if (Array.isArray(sys.thermistors) || (sys.therm_cal_session && typeof sys.therm_cal_session === 'object')) {
+      storeThermState(sys.thermistors, sys.therm_cal_session);
+      refreshThermUI();
     }
   }
 
@@ -787,6 +967,88 @@ const S = {
     });
   }
 
+  if (S.thermNominal && !S.thermNominal.value) {
+    S.thermNominal.value = '25.0';
+  }
+  if (S.thermChannel) {
+    S.thermChannel.addEventListener('change', () => updateThermButtons());
+  }
+  if (S.thermStart) {
+    S.thermStart.addEventListener('click', () => {
+      showThermMessage('Starting calibration session…', 'pending');
+      sendThermAction('start');
+    });
+  }
+  if (S.thermCaptureLow) {
+    S.thermCaptureLow.addEventListener('click', () => {
+      const raw = S.thermLow ? S.thermLow.value : '';
+      const actual = Number.parseFloat(raw);
+      if (!Number.isFinite(actual)) {
+        showThermMessage('Enter the cold reference temperature before capturing.', 'error');
+        return;
+      }
+      showThermMessage('Capturing cold reference…', 'pending');
+      sendThermAction('capture', { point: 'low', actual_c: actual });
+    });
+  }
+  if (S.thermCaptureHigh) {
+    S.thermCaptureHigh.addEventListener('click', () => {
+      const raw = S.thermHigh ? S.thermHigh.value : '';
+      const actual = Number.parseFloat(raw);
+      if (!Number.isFinite(actual)) {
+        showThermMessage('Enter the hot reference temperature before capturing.', 'error');
+        return;
+      }
+      showThermMessage('Capturing hot reference…', 'pending');
+      sendThermAction('capture', { point: 'high', actual_c: actual });
+    });
+  }
+  if (S.thermSolve) {
+    S.thermSolve.addEventListener('click', () => {
+      const nominalRaw = S.thermNominal ? S.thermNominal.value : '';
+      const nominal = Number.parseFloat(nominalRaw);
+      const session = stateCache.therm.session || {};
+      if (!session.active) {
+        showThermMessage('Start a calibration session before solving.', 'error');
+        return;
+      }
+      if (!session.has_low || !session.has_high) {
+        showThermMessage('Capture both cold and hot references before solving.', 'error');
+        return;
+      }
+      const payload = Number.isFinite(nominal) ? { nominal_c: nominal } : {};
+      showThermMessage('Solving calibration…', 'pending');
+      sendThermAction('solve', payload);
+    });
+  }
+  if (S.thermCancel) {
+    S.thermCancel.addEventListener('click', () => {
+      showThermMessage('Cancelling calibration session…', 'pending');
+      sendThermAction('cancel');
+    });
+  }
+  if (S.thermClear) {
+    S.thermClear.addEventListener('click', () => {
+      showThermMessage('Clearing calibration…', 'pending');
+      sendThermAction('clear');
+    });
+  }
+
+  async function refreshThermStatus() {
+    try {
+      const res = await fetch('/api/therm/calibration');
+      if (!res.ok) return;
+      const data = await res.json();
+      storeThermState(data.thermistors, data.therm_cal_session);
+      refreshThermUI();
+    } catch {
+      // ignore initial fetch errors
+    }
+  }
+
+  refreshThermUI();
+  refreshThermStatus();
+
   setInterval(() => send('ping'), 5000);
   setInterval(updateLastUpdateLabel, 1000);
   window.addEventListener('beforeunload', flushDspUpdates);
@@ -844,7 +1106,8 @@ const S = {
   });
 
   const storedTab = typeof localStorage !== 'undefined' ? localStorage.getItem(TAB_STORAGE_KEY) : null;
-  setActiveTab(storedTab || tabButtons[0]?.dataset.tab);
+  const defaultTab = tabButtons.length > 0 ? tabButtons[0].dataset.tab : null;
+  setActiveTab(storedTab || defaultTab);
 
   document.querySelectorAll('[data-card]').forEach((card) => {
     const toggle = card.querySelector('.collapse-toggle');

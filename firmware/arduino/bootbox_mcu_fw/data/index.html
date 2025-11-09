@@ -185,6 +185,50 @@
         gap: 14px;
         grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
       }
+      .therm-grid {
+        display: grid;
+        gap: 20px;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      }
+      .therm-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .therm-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        margin-top: 12px;
+      }
+      .therm-table th,
+      .therm-table td {
+        text-align: left;
+        padding: 6px 8px;
+        border-bottom: 1px solid rgba(45, 60, 82, 0.6);
+      }
+      .therm-table th {
+        color: var(--text-muted);
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .therm-table td.status {
+        font-weight: 600;
+      }
+      .therm-session {
+        margin-top: 10px;
+        font-size: 13px;
+        color: var(--text-muted);
+      }
+      .therm-message.status-line {
+        margin-top: 0;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgba(25, 34, 50, 0.7);
+        border: 1px solid rgba(59, 130, 246, 0.18);
+      }
       .metric .label {
         font-size: 14px;
         color: var(--text-muted);
@@ -898,6 +942,78 @@
                   <span class="meta-label">Filesystem</span>
                   <span class="meta-value" id="sys-fs">—</span>
                   <span class="meta-hint" id="sys-fs-hint">Filesystem not mounted</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <article class="card calibrator collapsible" data-card="therm-cal">
+            <header class="card-header">
+              <div>
+                <h2>Thermistor Calibration</h2>
+                <span class="muted">Capture reference points to refine temperature conversion</span>
+              </div>
+              <div class="header-actions">
+                <button class="collapse-toggle" aria-label="Toggle thermistor calibration">
+                  <span class="chevron">▾</span>
+                </button>
+              </div>
+            </header>
+            <div class="card-body">
+              <div class="therm-grid">
+                <div>
+                  <div class="field-group">
+                    <label for="therm-channel" class="label">Thermistor channel</label>
+                    <select id="therm-channel">
+                      <option value="1">Channel 1</option>
+                      <option value="2">Channel 2</option>
+                    </select>
+                  </div>
+                  <p class="hint">Stabilise the probe in a known cold and hot bath (e.g. iced water and boiling water). Capture each reference, then solve to store the updated curve.</p>
+                  <div class="field-group dual">
+                    <div>
+                      <label for="therm-low" class="label">Cold reference (°C)</label>
+                      <input id="therm-low" type="number" step="0.1" placeholder="0.0" />
+                    </div>
+                    <div>
+                      <label for="therm-high" class="label">Hot reference (°C)</label>
+                      <input id="therm-high" type="number" step="0.1" placeholder="100.0" />
+                    </div>
+                  </div>
+                  <div class="field-group">
+                    <label for="therm-nominal" class="label">Nominal calibration point (°C)</label>
+                    <input id="therm-nominal" type="number" step="0.1" value="25.0" />
+                    <span class="hint">Match the datasheet nominal (usually 25 °C).</span>
+                  </div>
+                  <div class="therm-actions">
+                    <button id="therm-start">Start session</button>
+                    <button class="secondary" id="therm-capture-low">Capture cold</button>
+                    <button class="secondary" id="therm-capture-high">Capture hot</button>
+                    <button id="therm-solve">Solve &amp; save</button>
+                    <button class="secondary" id="therm-cancel">Cancel</button>
+                    <button class="secondary" id="therm-clear">Clear calibration</button>
+                  </div>
+                  <div class="status-line therm-message" id="therm-message">No calibration actions yet.</div>
+                  <div class="therm-session" id="therm-session">No calibration session in progress.</div>
+                </div>
+                <div>
+                  <h3 style="margin: 0 0 10px;">Current curve parameters</h3>
+                  <table class="therm-table">
+                    <thead>
+                      <tr>
+                        <th>Channel</th>
+                        <th>Status</th>
+                        <th>Nominal</th>
+                        <th>β</th>
+                        <th>Series</th>
+                      </tr>
+                    </thead>
+                    <tbody id="therm-table-body">
+                      <tr>
+                        <td colspan="5">Awaiting data…</td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
               </div>
             </div>

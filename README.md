@@ -13,26 +13,55 @@ Firmware for a Wi-Fi MCU system controller for a DIY car stereo using an ADAU170
 - UI assets live in `firmware/arduino/bootbox_mcu_fw/data/`; the build script repacks them into the LittleFS image automatically.
 
 ## Features
-- WebSocket protocol `{type,id,data}` with app-level ack/retry, periodic `state` broadcast.
-- Simple settings storage (NVS/Preferences): PID enable, 2 setpoints, manual fan %, PID gains, upload toggles.
-- DSP preview workspace with live knobs/faders for master/stereo/sub gains and crossover points (values persisted in NVS; wiring to ADAU1701 to follow).
+- WebSocket protocol `{type,id,data}` with app-level ack/retry, periodic `state` broadcast, and dirty-state aware UI widgets.
+- Persistent settings (Preferences/NVS): PID enable, dual setpoints, manual fan %, PID gains, DSP placeholder controls, thermistor calibration curves.
+- System tab with thermistor calibration wizard (capture cold/hot reference baths, solve curve, store to NVS) plus live system metrics.
+- ADAU mixer preview with knobs/faders for master/stereo/sub gain, crossover link, and range enforcement (wiring to ADAU1701 coming next).
+- Status LED pattern driver with distinct blink codes for boot, OK, logs, thermal, network, DSP, and critical faults.
 - HTTP endpoints:
-  - `/api/state` (GET): current temps, RPM, target, settings.
-  - `/api/upload/adau` (POST): upload ADAU images to `/dsp/` (unrestricted).
+  - `/api/state` (GET): temps, fan data, DSP params, system metadata, thermistor cal state.
+  - `/api/upload/adau` (POST): upload ADAU binaries into LittleFS `/dsp/`.
   - `/api/logs` (GET): device log ring buffer.
+  - `/api/therm/calibration` (GET/POST): manage calibration workflow (start, capture, solve, clear).
 
 ## Hardware Connections (prototype)
 - Thermistors (NTC) to analog: `temp1 -> GPIO34`, `temp2 -> GPIO35`. Use voltage dividers to 3.3V; adjust ADC-to-temp curve in code.
+- Default config ships with dual 10k/10k dividers; if you swap probes or bias resistors, update `THERMISTOR*_PARAMS` in `config.h` or run the calibration wizard (System tab) to solve for nominal resistance/beta.
 - Fan control:
   - Global setting in `firmware/arduino/bootbox_mcu_fw/config.h` → `kFanType` (`Fan3Wire` or `Fan4Wire`).
   - Control pins: `PIN_FAN1_CTRL` (required) and `PIN_FAN2_CTRL` (optional second fan, share duty). Set the secondary pin/channel to `-1` to disable.
   - Tach inputs (`PIN_FAN1_TACH`, `PIN_FAN2_TACH`) are reserved for future RPM capture.
   - PWM freq: 4-wire uses 25 kHz; 3-wire default 1 kHz (configurable). 3-wire applies a minimum start duty to avoid stall.
 - ADAU1701: I2C for control (future): `SDA -> GPIO21`, `SCL -> GPIO22`. SPI/I2S for audio as needed by your module (not yet used here).
+- USB serial: tested with CH340 and CP2102 bridges; adjust `PORT=/dev/ttyUSBx` accordingly.
 
 ## Libraries
 - ESPAsyncWebServer, AsyncTCP, ArduinoJson, LittleFS, Preferences (Arduino core). Install via Boards Manager/Library Manager.
 
+## Thermistor calibration workflow
+1. Wire your probes + divider, update `config.h` with approximate defaults (e.g. 10k/10k, β=3950).
+2. Open the web UI → *System* tab → *Thermistor Calibration* card.
+3. Pick the channel, click **Start session**, then capture cold/hot reference points (e.g. iced water ≈0 °C, boiling ≈100 °C) using the buttons. Each capture uses averaged ADC samples at the moment you click.
+4. Optionally set the datasheet nominal temperature (defaults to 25 °C) and hit **Solve & save** to persist the curve in NVS. You can clear or cancel from the same card.
+
+## Status LED codes
+| Pattern | Meaning |
+| --- | --- |
+| Fast double blink | Booting |
+| 50 ms flash every 2 s | System OK |
+| Two short pulses | Check logs (recent watchdog/panic) |
+| Triple pulse | Thermal error |
+| Long-short-long | Network error |
+| Slow solid | Critical error |
+
+Patterns automatically adjust for the configured LED polarity.
+
 ## Notes
-- Tuning: adjust PID gains in UI. Setpoints default to 45/55°C. Replace `adcToTempC()` with your NTC curve.
-- Build-time config: edit `firmware/arduino/bootbox_mcu_fw/config.h` to set fan type, pins, and PWM parameters.
+- Tuning: adjust PID gains/setpoints in UI; manual fan target persists while PID is disabled.
+- Build-time config: edit `firmware/arduino/bootbox_mcu_fw/config.h` for fan type, pin map, PWM frequency, thermistor defaults, LED polarity, etc.
+- `tools/arduino-build.sh` packs LittleFS alongside the firmware so uploads always deliver both the sketch and UI assets.
+
+## Releases
+1. Build with `tools/arduino-build.sh --config-file arduino-cli.yaml` (optionally pass `--build-path`).
+2. Package artifacts from `.arduino-build/` (e.g. `bootbox_mcu_fw.unified.bin`, `flash-manifest.json`, LittleFS image) into a zip/tarball.
+3. Tag and publish via GitHub releases (see `docs/BUILD.md` for command snippets). Each release should note the matching commit SHA and include the generated archive for flashing without the toolchain.
