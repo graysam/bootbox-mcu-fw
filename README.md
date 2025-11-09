@@ -14,13 +14,20 @@ Firmware for a Wi-Fi MCU system controller for a DIY car stereo using an ADAU170
 
 ## Features
 - WebSocket protocol `{type,id,data}` with app-level ack/retry, periodic `state` broadcast, and dirty-state aware UI widgets.
-- Persistent settings (Preferences/NVS): PID enable, dual setpoints, manual fan %, PID gains, DSP placeholder controls, thermistor calibration curves.
+- Persistent settings (Preferences/NVS): PID enable, dual setpoints, manual fan %, PID gains, thermistor calibration curves, DSP control values.
 - System tab with thermistor calibration wizard (capture cold/hot reference baths, solve curve, store to NVS) plus live system metrics.
-- ADAU mixer preview with knobs/faders for master/stereo/sub gain, crossover link, and range enforcement (wiring to ADAU1701 coming next).
+- DSP management:
+  - Upload/manage SigmaStudio “bundles” (program + interface XML) stored under LittleFS `/dsp/&lt;bundle&gt;/`.
+  - Dynamic DSP controls rendered from the uploaded interface schema.
+  - Preset system per bundle (save/load/delete) persisted under `/dsp-presets/`.
+  - REST/WS API to select bundles, rename/delete, and (for now) request a “push” while keeping the ADAU in self-boot mode.
 - Status LED pattern driver with distinct blink codes for boot, OK, logs, thermal, network, DSP, and critical faults.
 - HTTP endpoints:
-  - `/api/state` (GET): temps, fan data, DSP params, system metadata, thermistor cal state.
-  - `/api/upload/adau` (POST): upload ADAU binaries into LittleFS `/dsp/`.
+  - `/api/state` (GET): temps, fan data, current DSP values, system metadata, thermistor cal state.
+  - `/api/dsp/bundles` (GET): enumerate bundles (name, active flag, file presence).
+  - `/api/dsp/schema` (GET): active bundle + parsed controls + current values + presets.
+  - `/api/dsp/action` (POST): JSON `{"action": ...}` for bundle select/delete/rename/push and preset save/load/delete.
+  - `/api/upload/adau` (POST form): upload program/interface files (`bundle` + `kind=program|interface` query params).
   - `/api/logs` (GET): device log ring buffer.
   - `/api/therm/calibration` (GET/POST): manage calibration workflow (start, capture, solve, clear).
 
@@ -60,8 +67,28 @@ Patterns automatically adjust for the configured LED polarity.
 - Tuning: adjust PID gains/setpoints in UI; manual fan target persists while PID is disabled.
 - Build-time config: edit `firmware/arduino/bootbox_mcu_fw/config.h` for fan type, pin map, PWM frequency, thermistor defaults, LED polarity, etc.
 - `tools/arduino-build.sh` packs LittleFS alongside the firmware so uploads always deliver both the sketch and UI assets.
+- DSP bundles: store SigmaStudio binaries + interface schemas in `/dsp/&lt;bundle&gt;/{program.bin,interface.xml}`; presets live in `/dsp-presets/&lt;bundle&gt;/`.
 
 ## Releases
 1. Build with `tools/arduino-build.sh --config-file arduino-cli.yaml` (optionally pass `--build-path`).
 2. Package artifacts from `.arduino-build/` (e.g. `bootbox_mcu_fw.unified.bin`, `flash-manifest.json`, LittleFS image) into a zip/tarball.
 3. Tag and publish via GitHub releases (see `docs/BUILD.md` for command snippets). Each release should note the matching commit SHA and include the generated archive for flashing without the toolchain.
+
+## DSP Bundles & Interface Schema
+- Each bundle resides under LittleFS `/dsp/&lt;bundle&gt;/` and consists of:
+  - `program.bin` – SigmaStudio self-boot image staged for future pushes.
+  - `interface.xml` – control definition file consumed by the web UI/firmware.
+- Interface XML format (simplified example):
+
+```xml
+<interface>
+  <control id="master" label="Master Volume" type="slider" unit="dB"
+           min="-60" max="12" step="0.5" default="-10" address="0x1000" />
+  <control id="xover" label="Crossover" type="slider" unit="Hz"
+           min="40" max="240" step="1" default="120" address="0x1010" />
+  <control id="mute" label="Mute Outputs" type="toggle"
+           min="0" max="1" address="0x1020" />
+</interface>
+```
+
+Supported control attributes: `id`, `label`, `type` (`slider` default, `toggle`), `unit`, `min`, `max`, `step`, `default`, `address`, `bytes`, `format`. Firmware parses this file on upload/activation and exposes the controls via `/api/dsp/schema`; the UI renders matching widgets and streams changes over the WebSocket (`set_dsp` messages).

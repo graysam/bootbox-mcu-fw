@@ -13,6 +13,8 @@
 #include <cstddef>
 #include <cmath>
 #include <cstdio>
+#include <cctype>
+#include <functional>
 
 #include "config.h"
 #include "settings.h"
@@ -51,6 +53,58 @@ static constexpr uint32_t SETTINGS_SAVE_DELAY_MS = 1500;
 static bool littlefs_ready = false;
 static esp_reset_reason_t last_reset_reason = ESP_RST_UNKNOWN;
 
+// ---- DSP manager data ----
+static const char DSP_DIR[] = "/dsp";
+static const char DSP_PRESET_DIR[] = "/dsp-presets";
+static constexpr size_t DSP_MAX_CONTROLS = 48;
+static constexpr uint32_t DSP_SAVE_DELAY_MS = 1200;
+
+struct DspControlSpec {
+  String id;
+  String label;
+  String type;      // knob, slider, toggle, select
+  String unit;
+  float min_v = 0.0f;
+  float max_v = 1.0f;
+  float step = 0.1f;
+  float default_v = NAN;
+  uint32_t address = 0;
+  uint8_t bytes = 4;
+  String format = "float"; // float, fixed, etc.
+};
+
+struct DspValueEntry {
+  String id;
+  float value = NAN;
+};
+
+static std::vector<DspControlSpec> dsp_controls;
+static std::vector<DspValueEntry> dsp_values;
+static String dsp_active_bundle;
+static bool dsp_schema_ready = false;
+static bool dsp_values_dirty = false;
+static uint32_t dsp_values_dirty_since = 0;
+
+struct DspPresetInfo {
+  String name;
+  size_t size = 0;
+};
+
+static void ensureDspDirectories();
+static void dspInit();
+static bool loadDspBundle(const String& name, bool persist);
+static void listDspBundles(JsonArray arr);
+static void listDspPresets(const String& bundle, JsonArray arr);
+static bool handleDspControlUpdate(JsonObject data);
+static void markDspValuesDirty();
+static void flushPendingDspSaves();
+static bool savePreset(const String& bundle, const String& presetName);
+static bool applyPreset(const String& bundle, const String& presetName);
+static bool deletePreset(const String& bundle, const String& presetName);
+static bool deleteBundle(const String& name);
+static bool renameBundle(const String& oldName, const String& newName);
+static bool pushBundleToDsp(const String& name);
+
 static inline bool fanSlotEnabled(size_t idx) {
   return idx < FAN_SLOT_COUNT && FAN_CTRL_PINS[idx] >= 0 && FAN_PWM_CHANNELS[idx] >= 0;
 }
@@ -75,8 +129,8 @@ static inline void markSettingsDirty() {
 }
 
 static void fillSystemInfo(JsonObject obj);
-static bool handleDspUpdate(JsonObject data);
 static const char* resetReasonToStr(esp_reset_reason_t reason);
+static void populateDspState(JsonObject obj);
 static void refreshThermistorParams();
 static AsyncJsonResponse* createThermStatusResponse(bool ok, const String& message, int statusCode = 200);
 
@@ -283,17 +337,7 @@ static void wsBroadcastState() {
   data["kd"] = settings.pid_kd;
 
   auto dsp = doc.createNestedObject("dsp");
-  dsp["master_db"] = settings.dsp_master_db;
-  dsp["stereo_db"] = settings.dsp_stereo_db;
-  dsp["sub_lo_db"] = settings.dsp_sub_lo_db;
-  dsp["sub_hi_db"] = settings.dsp_sub_hi_db;
-  dsp["cross_mains_hz"] = settings.dsp_cross_mains_hz;
-  dsp["cross_sub_hz"] = settings.dsp_cross_sub_hz;
-  dsp["cross_linked"] = settings.dsp_cross_linked;
-  dsp["sub_lo_hp_hz"] = settings.dsp_sub_lo_hp_hz;
-  dsp["sub_lo_lp_hz"] = settings.dsp_sub_lo_lp_hz;
-  dsp["sub_hi_hp_hz"] = settings.dsp_sub_hi_hp_hz;
-  dsp["sub_hi_lp_hz"] = settings.dsp_sub_hi_lp_hz;
+  populateDspState(dsp);
 
   auto sys = doc.createNestedObject("sys");
   fillSystemInfo(sys);
@@ -371,11 +415,7 @@ static void onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
 
     if (strcmp(mtype, "set_dsp") == 0) {
       JsonObject data = doc["data"];
-      bool changed = false;
-      if (!data.isNull()) changed = handleDspUpdate(data);
-      if (changed) {
-        markSettingsDirty();
-        addLog("dsp params updated");
+      if (!data.isNull() && handleDspControlUpdate(data)) {
         wsBroadcastState();
       }
       return;
@@ -425,39 +465,262 @@ static void registerHttpRoutes() {
     doc["sp1"] = settings.setpoint1_c;
     doc["sp2"] = settings.setpoint2_c;
     auto dsp = doc.createNestedObject("dsp");
-    dsp["master_db"] = settings.dsp_master_db;
-    dsp["stereo_db"] = settings.dsp_stereo_db;
-    dsp["sub_lo_db"] = settings.dsp_sub_lo_db;
-    dsp["sub_hi_db"] = settings.dsp_sub_hi_db;
-    dsp["cross_mains_hz"] = settings.dsp_cross_mains_hz;
-    dsp["cross_sub_hz"] = settings.dsp_cross_sub_hz;
-    dsp["cross_linked"] = settings.dsp_cross_linked;
-    dsp["sub_lo_hp_hz"] = settings.dsp_sub_lo_hp_hz;
-    dsp["sub_lo_lp_hz"] = settings.dsp_sub_lo_lp_hz;
-    dsp["sub_hi_hp_hz"] = settings.dsp_sub_hi_hp_hz;
-    dsp["sub_hi_lp_hz"] = settings.dsp_sub_hi_lp_hz;
+    populateDspState(dsp);
     auto sys = doc.createNestedObject("sys");
     fillSystemInfo(sys);
     String out; serializeJson(doc, out);
     req->send(200, "application/json", out);
   });
 
-  // Upload ADAU1701 binary/images to /dsp directory in LittleFS
+  server.on("/api/dsp/schema", HTTP_GET, [](AsyncWebServerRequest* req){
+    StaticJsonDocument<2048> doc;
+    doc["active"] = dsp_active_bundle;
+    auto controls = doc.createNestedArray("controls");
+    for (const auto& spec : dsp_controls) {
+      auto c = controls.createNestedObject();
+      c["id"] = spec.id;
+      c["label"] = spec.label;
+      c["type"] = spec.type;
+      c["unit"] = spec.unit;
+      c["min"] = spec.min_v;
+      c["max"] = spec.max_v;
+      c["step"] = spec.step;
+      if (!std::isnan(spec.default_v)) c["default"] = spec.default_v;
+      c["format"] = spec.format;
+    }
+    auto values = doc.createNestedObject("values");
+    for (const auto& entry : dsp_values) {
+      values[entry.id] = entry.value;
+    }
+    auto presets = doc.createNestedArray("presets");
+    listDspPresets(dsp_active_bundle, presets);
+    String out; serializeJson(doc, out);
+    req->send(200, "application/json", out);
+  });
+
+  server.on("/api/dsp/bundles", HTTP_GET, [](AsyncWebServerRequest* req){
+    StaticJsonDocument<1536> doc;
+    doc["active"] = dsp_active_bundle;
+    auto arr = doc.createNestedArray("bundles");
+    listDspBundles(arr);
+    String out; serializeJson(doc, out);
+    req->send(200, "application/json", out);
+  });
+
+  auto* dspActionHandler = new AsyncCallbackJsonWebHandler("/api/dsp/action",
+    [](AsyncWebServerRequest* req, JsonVariant& json) {
+      auto sendResponse = [&](bool ok, const String& message, int status){
+        StaticJsonDocument<256> resp;
+        resp["ok"] = ok;
+        if (message.length()) resp["message"] = message;
+        String out; serializeJson(resp, out);
+        req->send(status, "application/json", out);
+      };
+
+      if (!json.is<JsonObject>()) {
+        sendResponse(false, "invalid_payload", 400);
+        return;
+      }
+
+      JsonObject obj = json.as<JsonObject>();
+      const char* action = obj["action"] | "";
+      if (!action || !action[0]) {
+        sendResponse(false, "missing_action", 400);
+        return;
+      }
+
+      auto bundleFromPayload = [&](const char* key) -> String {
+        if (!obj.containsKey(key)) return dsp_active_bundle;
+        const char* raw = obj[key];
+        if (!raw) return dsp_active_bundle;
+        return String(raw);
+      };
+
+      String message;
+
+      if (strcmp(action, "select_bundle") == 0) {
+        String name = bundleFromPayload("name");
+        if (!name.length()) {
+          sendResponse(false, "bundle_required", 400);
+          return;
+        }
+        if (loadDspBundle(name, true)) {
+          addLog(String("dsp bundle set to ") + name);
+          wsBroadcastState();
+          sendResponse(true, "bundle_selected", 200);
+        } else {
+          sendResponse(false, "bundle_not_found", 404);
+        }
+        return;
+      }
+
+      if (strcmp(action, "delete_bundle") == 0) {
+        String name = bundleFromPayload("name");
+        if (!name.length()) {
+          sendResponse(false, "bundle_required", 400);
+          return;
+        }
+        if (deleteBundle(name)) {
+          addLog(String("dsp bundle deleted: ") + name);
+          if (name == dsp_active_bundle) {
+            loadDspBundle("", true);
+            wsBroadcastState();
+          }
+          sendResponse(true, "bundle_deleted", 200);
+        } else {
+          sendResponse(false, "delete_failed", 500);
+        }
+        return;
+      }
+
+      if (strcmp(action, "rename_bundle") == 0) {
+        String name = bundleFromPayload("name");
+        const char* rawNew = obj["new_name"] | "";
+        String newName = rawNew;
+        if (!name.length() || !newName.length()) {
+          sendResponse(false, "name_required", 400);
+          return;
+        }
+        if (renameBundle(name, newName)) {
+          addLog(String("dsp bundle renamed: ") + name + " -> " + newName);
+          if (name == dsp_active_bundle) {
+            loadDspBundle(newName, true);
+            wsBroadcastState();
+          }
+          sendResponse(true, "bundle_renamed", 200);
+        } else {
+          sendResponse(false, "rename_failed", 500);
+        }
+        return;
+      }
+
+      if (strcmp(action, "push_bundle") == 0) {
+        String name = bundleFromPayload("name");
+        if (!name.length()) {
+          sendResponse(false, "bundle_required", 400);
+          return;
+        }
+        if (pushBundleToDsp(name)) {
+          sendResponse(true, "bundle_pushed", 200);
+        } else {
+          sendResponse(false, "push_failed", 500);
+        }
+        return;
+      }
+
+      if (strcmp(action, "save_preset") == 0) {
+        String bundle = bundleFromPayload("bundle");
+        const char* rawPreset = obj["preset"] | "";
+        String preset = rawPreset;
+        if (!bundle.length() || !preset.length()) {
+          sendResponse(false, "preset_required", 400);
+          return;
+        }
+        if (savePreset(bundle, preset)) {
+          addLog(String("preset saved: ") + bundle + "/" + preset);
+          sendResponse(true, "preset_saved", 200);
+        } else {
+          sendResponse(false, "preset_save_failed", 500);
+        }
+        return;
+      }
+
+      if (strcmp(action, "load_preset") == 0) {
+        String bundle = bundleFromPayload("bundle");
+        const char* rawPreset = obj["preset"] | "";
+        String preset = rawPreset;
+        if (!bundle.length() || !preset.length()) {
+          sendResponse(false, "preset_required", 400);
+          return;
+        }
+        if (applyPreset(bundle, preset)) {
+          addLog(String("preset loaded: ") + bundle + "/" + preset);
+          wsBroadcastState();
+          sendResponse(true, "preset_loaded", 200);
+        } else {
+          sendResponse(false, "preset_load_failed", 500);
+        }
+        return;
+      }
+
+      if (strcmp(action, "delete_preset") == 0) {
+        String bundle = bundleFromPayload("bundle");
+        const char* rawPreset = obj["preset"] | "";
+        String preset = rawPreset;
+        if (!bundle.length() || !preset.length()) {
+          sendResponse(false, "preset_required", 400);
+          return;
+        }
+        if (deletePreset(bundle, preset)) {
+          addLog(String("preset deleted: ") + bundle + "/" + preset);
+          sendResponse(true, "preset_deleted", 200);
+        } else {
+          sendResponse(false, "preset_delete_failed", 500);
+        }
+        return;
+      }
+
+      sendResponse(false, "unknown_action", 400);
+    });
+  server.addHandler(dspActionHandler);
+
+  // Upload SigmaStudio bundles (program/interface)
   server.on("/api/upload/adau", HTTP_POST,
             [](AsyncWebServerRequest* req){
-              // Unrestricted upload endpoint (no token, always enabled)
-              req->send(200, "text/plain", "ok");
+              StaticJsonDocument<128> resp;
+              resp["ok"] = true;
+              String out; serializeJson(resp, out);
+              req->send(200, "application/json", out);
             },
             [](AsyncWebServerRequest* req, String filename, size_t index, uint8_t* data, size_t len, bool final){
-              static File f;
+              struct UploadContext {
+                File file;
+                String bundle;
+                String kind;
+                String path;
+              };
+
+              auto* ctx = reinterpret_cast<UploadContext*>(req->_tempObject);
               if (index == 0) {
-                LittleFS.mkdir("/dsp");
-                String path = String("/dsp/") + filename;
-                f = LittleFS.open(path, FILE_WRITE);
-                addLog(String("upload start ") + filename);
+                ctx = new UploadContext();
+                req->_tempObject = ctx;
+                String bundle = "default";
+                String kind = "program";
+                if (req->hasParam("bundle")) bundle = req->getParam("bundle")->value();
+                if (req->hasParam("kind")) kind = req->getParam("kind")->value();
+                if (!bundle.length()) bundle = "default";
+                if (!kind.length()) kind = "program";
+                ctx->bundle = bundle;
+                ctx->kind = kind;
+                String dir = String(DSP_DIR) + "/" + bundle;
+                LittleFS.mkdir(DSP_DIR);
+                LittleFS.mkdir(dir);
+                String target = dir + "/";
+                if (kind == "interface") {
+                  target += "interface.xml";
+                } else {
+                  target += "program.bin";
+                }
+                ctx->path = target;
+                ctx->file = LittleFS.open(target, FILE_WRITE);
+                addLog(String("upload start ") + target);
               }
-              if (f) f.write(data, len);
-              if (final && f) { f.close(); addLog(String("upload done ") + filename); }
+
+              ctx = reinterpret_cast<UploadContext*>(req->_tempObject);
+              if (ctx && ctx->file) {
+                ctx->file.write(data, len);
+              }
+
+              if (final && ctx) {
+                if (ctx->file) ctx->file.close();
+                addLog(String("upload done ") + ctx->path);
+                if (ctx->bundle == dsp_active_bundle && ctx->kind == "interface") {
+                  loadDspBundle(dsp_active_bundle, false);
+                  wsBroadcastState();
+                }
+                delete ctx;
+                req->_tempObject = nullptr;
+              }
   });
 
   server.on("/api/therm/calibration", HTTP_GET, [](AsyncWebServerRequest* req){
@@ -810,6 +1073,444 @@ static void fillSystemInfo(JsonObject obj) {
   populateThermStatus(obj);
 }
 
+// ---- DSP interface helpers ----
+
+static DspControlSpec* findDspControl(const String& id) {
+  for (auto& spec : dsp_controls) {
+    if (spec.id == id) return &spec;
+  }
+  return nullptr;
+}
+
+static DspValueEntry* findDspValue(const String& id) {
+  for (auto& entry : dsp_values) {
+    if (entry.id == id) return &entry;
+  }
+  return nullptr;
+}
+
+static float getDspValue(const String& id) {
+  auto* entry = findDspValue(id);
+  if (!entry) return NAN;
+  return entry->value;
+}
+
+static void setDspValueInternal(const String& id, float value, bool markDirtyFlag) {
+  auto* entry = findDspValue(id);
+  if (!entry) {
+    DspValueEntry e;
+    e.id = id;
+    e.value = value;
+    dsp_values.push_back(e);
+  } else {
+    entry->value = value;
+  }
+  if (markDirtyFlag) markDspValuesDirty();
+}
+
+static void loadDspValuesFromPrefs() {
+  dsp_values.clear();
+  String stored = prefs.getString("dspVals", "");
+  if (!stored.length()) return;
+  DynamicJsonDocument doc(4096);
+  if (deserializeJson(doc, stored) != DeserializationError::Ok) return;
+  JsonObject obj = doc.as<JsonObject>();
+  for (JsonPair kv : obj) {
+    DspValueEntry entry;
+    entry.id = kv.key().c_str();
+    entry.value = kv.value().as<float>();
+    dsp_values.push_back(entry);
+  }
+}
+
+static void saveDspValuesNow() {
+  DynamicJsonDocument doc(4096);
+  for (const auto& entry : dsp_values) {
+    doc[entry.id] = entry.value;
+  }
+  String out;
+  serializeJson(doc, out);
+  prefs.putString("dspVals", out);
+  dsp_values_dirty = false;
+}
+
+static void markDspValuesDirty() {
+  dsp_values_dirty = true;
+  dsp_values_dirty_since = millis();
+}
+
+static void flushPendingDspSaves() {
+  if (!dsp_values_dirty) return;
+  if (millis() - dsp_values_dirty_since < DSP_SAVE_DELAY_MS) return;
+  saveDspValuesNow();
+}
+
+static void ensureDspDirectories() {
+  if (!LittleFS.exists(DSP_DIR)) LittleFS.mkdir(DSP_DIR);
+  if (!LittleFS.exists(DSP_PRESET_DIR)) LittleFS.mkdir(DSP_PRESET_DIR);
+}
+
+static String pickFirstBundleName() {
+  File root = LittleFS.open(DSP_DIR);
+  if (!root) return "";
+  File entry = root.openNextFile();
+  while (entry) {
+    if (entry.isDirectory()) {
+      String full = entry.name(); // e.g. /dsp/bundle
+      entry.close();
+      root.close();
+      if (full.startsWith(DSP_DIR)) {
+        String name = full.substring(strlen(DSP_DIR) + 1);
+        return name;
+      }
+      return full;
+    }
+    entry = root.openNextFile();
+  }
+  root.close();
+  return "";
+}
+
+static void syncDspValuesWithControls() {
+  // remove stale entries
+  dsp_values.erase(
+    std::remove_if(dsp_values.begin(), dsp_values.end(),
+      [](const DspValueEntry& entry){
+        return findDspControl(entry.id) == nullptr;
+      }),
+    dsp_values.end());
+
+  for (const auto& spec : dsp_controls) {
+    if (findDspValue(spec.id)) continue;
+    float initial = std::isnan(spec.default_v) ? ((spec.min_v + spec.max_v) * 0.5f) : spec.default_v;
+    initial = clampf(initial, spec.min_v, spec.max_v);
+    setDspValueInternal(spec.id, initial, false);
+  }
+}
+
+static bool parseDspInterface(const String& path, std::vector<DspControlSpec>& out) {
+  File f = LittleFS.open(path, FILE_READ);
+  if (!f) return false;
+  String xml = f.readString();
+  f.close();
+  out.clear();
+  int idx = 0;
+  while ((idx = xml.indexOf("<control", idx)) != -1) {
+    int end = xml.indexOf("/>", idx);
+    if (end == -1) break;
+    String segment = xml.substring(idx, end);
+    idx = end + 2;
+
+    DspControlSpec spec;
+    spec.type = "slider";
+    spec.unit = "";
+
+    int pos = segment.indexOf(' ');
+    while (pos != -1) {
+      while (pos < segment.length() && isspace(segment[pos])) ++pos;
+      if (pos >= segment.length()) break;
+      int eq = segment.indexOf('=', pos);
+      if (eq == -1) break;
+      String key = segment.substring(pos, eq);
+      key.trim();
+      int quoteStart = segment.indexOf('"', eq);
+      if (quoteStart == -1) break;
+      int quoteEnd = segment.indexOf('"', quoteStart + 1);
+      if (quoteEnd == -1) break;
+      String value = segment.substring(quoteStart + 1, quoteEnd);
+      pos = quoteEnd + 1;
+
+      if (key == "id") spec.id = value;
+      else if (key == "label") spec.label = value;
+      else if (key == "type") spec.type = value;
+      else if (key == "unit") spec.unit = value;
+      else if (key == "min") spec.min_v = value.toFloat();
+      else if (key == "max") spec.max_v = value.toFloat();
+      else if (key == "step") spec.step = value.toFloat();
+      else if (key == "default") spec.default_v = value.toFloat();
+      else if (key == "address") spec.address = strtoul(value.c_str(), nullptr, 0);
+      else if (key == "bytes") spec.bytes = static_cast<uint8_t>(value.toInt());
+      else if (key == "format") spec.format = value;
+    }
+
+    if (!spec.id.length()) continue;
+    if (!spec.label.length()) spec.label = spec.id;
+    if (spec.step <= 0.0f) spec.step = 0.1f;
+    if (spec.max_v <= spec.min_v) spec.max_v = spec.min_v + spec.step;
+    if (spec.bytes == 0) spec.bytes = 4;
+    out.push_back(spec);
+    if (out.size() >= DSP_MAX_CONTROLS) break;
+  }
+  return !out.empty();
+}
+
+static void dspInit() {
+  ensureDspDirectories();
+  loadDspValuesFromPrefs();
+  String saved = prefs.getString("dspBundle", "");
+  if (!saved.length()) saved = pickFirstBundleName();
+  if (saved.length()) {
+    loadDspBundle(saved, false);
+  } else {
+    dsp_controls.clear();
+    dsp_schema_ready = false;
+  }
+}
+
+static bool loadDspBundle(const String& name, bool persist) {
+  String target = name;
+  if (!target.length()) target = pickFirstBundleName();
+  if (!target.length()) {
+    dsp_controls.clear();
+    dsp_active_bundle = "";
+    dsp_schema_ready = false;
+    if (persist) prefs.putString("dspBundle", "");
+    return false;
+  }
+  String dir = String(DSP_DIR) + "/" + target;
+  String iface = dir + "/interface.xml";
+  if (!LittleFS.exists(iface)) {
+    return false;
+  }
+  std::vector<DspControlSpec> parsed;
+  if (!parseDspInterface(iface, parsed)) {
+    return false;
+  }
+  dsp_controls = parsed;
+  syncDspValuesWithControls();
+  dsp_active_bundle = target;
+  dsp_schema_ready = true;
+  if (persist) prefs.putString("dspBundle", target);
+  return true;
+}
+
+static void populateDspState(JsonObject obj) {
+  obj["bundle"] = dsp_active_bundle;
+  obj["schema_ready"] = dsp_schema_ready;
+  auto values = obj.createNestedObject("values");
+  for (const auto& entry : dsp_values) {
+    values[entry.id] = entry.value;
+  }
+}
+
+static void listDspBundles(JsonArray arr) {
+  File root = LittleFS.open(DSP_DIR);
+  if (!root) return;
+  File entry = root.openNextFile();
+  while (entry) {
+    if (entry.isDirectory()) {
+      String full = entry.name();
+      String name = full.substring(strlen(DSP_DIR) + 1);
+      JsonObject obj = arr.createNestedObject();
+      obj["name"] = name;
+      obj["active"] = (name == dsp_active_bundle);
+      String base = String(DSP_DIR) + "/" + name + "/";
+      obj["has_program"] = LittleFS.exists(base + "program.bin");
+      obj["has_interface"] = LittleFS.exists(base + "interface.xml");
+    }
+    entry = root.openNextFile();
+  }
+  root.close();
+}
+
+static String presetPath(const String& bundle, const String& preset) {
+  return String(DSP_PRESET_DIR) + "/" + bundle + "/" + preset + ".json";
+}
+
+static void listDspPresets(const String& bundle, JsonArray arr) {
+  if (!bundle.length()) return;
+  String dirPath = String(DSP_PRESET_DIR) + "/" + bundle;
+  File dir = LittleFS.open(dirPath);
+  if (!dir) return;
+  File entry = dir.openNextFile();
+  while (entry) {
+    if (!entry.isDirectory()) {
+      String full = entry.name();
+      int slash = full.lastIndexOf('/');
+      String name = slash >= 0 ? full.substring(slash + 1) : full;
+      if (name.endsWith(".json")) {
+        name.remove(name.length() - 5);
+        arr.add(name);
+      }
+    }
+    entry = dir.openNextFile();
+  }
+  dir.close();
+}
+
+static bool savePreset(const String& bundle, const String& presetName) {
+  if (!bundle.length() || !presetName.length()) return false;
+  String dir = String(DSP_PRESET_DIR) + "/" + bundle;
+  LittleFS.mkdir(DSP_PRESET_DIR);
+  LittleFS.mkdir(dir);
+  String path = presetPath(bundle, presetName);
+  File f = LittleFS.open(path, FILE_WRITE);
+  if (!f) return false;
+  DynamicJsonDocument doc(2048);
+  for (const auto& entry : dsp_values) {
+    doc[entry.id] = entry.value;
+  }
+  if (serializeJson(doc, f) == 0) {
+    f.close();
+    LittleFS.remove(path);
+    return false;
+  }
+  f.close();
+  return true;
+}
+
+static bool applyPreset(const String& bundle, const String& presetName) {
+  if (!bundle.length() || !presetName.length()) return false;
+  String path = presetPath(bundle, presetName);
+  File f = LittleFS.open(path, FILE_READ);
+  if (!f) return false;
+  DynamicJsonDocument doc(2048);
+  auto err = deserializeJson(doc, f);
+  f.close();
+  if (err != DeserializationError::Ok) return false;
+  JsonObject obj = doc.as<JsonObject>();
+  bool changed = false;
+  for (JsonPair kv : obj) {
+    const char* id = kv.key().c_str();
+    float val = kv.value().as<float>();
+    DspControlSpec* spec = findDspControl(String(id));
+    if (!spec) continue;
+    float clamped = clampf(val, spec->min_v, spec->max_v);
+    float existing = getDspValue(spec->id);
+    if (std::isnan(existing) || fabsf(existing - clamped) > 0.0001f) {
+      setDspValueInternal(spec->id, clamped, false);
+      changed = true;
+    }
+  }
+  if (changed) markDspValuesDirty();
+  return changed;
+}
+
+static bool deletePreset(const String& bundle, const String& presetName) {
+  if (!bundle.length() || !presetName.length()) return false;
+  String path = presetPath(bundle, presetName);
+  return LittleFS.exists(path) ? LittleFS.remove(path) : false;
+}
+
+static bool deleteBundle(const String& name) {
+  if (!name.length()) return false;
+  String dir = String(DSP_DIR) + "/" + name;
+  if (!LittleFS.exists(dir)) return false;
+  File root = LittleFS.open(dir);
+  if (root) {
+    File entry = root.openNextFile();
+    while (entry) {
+      String path = entry.name();
+      entry.close();
+      LittleFS.remove(path);
+      entry = root.openNextFile();
+    }
+    root.close();
+  }
+  LittleFS.rmdir(dir);
+  String presetDir = String(DSP_PRESET_DIR) + "/" + name;
+  File pd = LittleFS.open(presetDir);
+  if (pd) {
+    File entry = pd.openNextFile();
+    while (entry) {
+      String path = entry.name();
+      entry.close();
+      LittleFS.remove(path);
+      entry = pd.openNextFile();
+    }
+    pd.close();
+  }
+  if (LittleFS.exists(presetDir)) {
+    LittleFS.rmdir(presetDir);
+  }
+  return true;
+}
+
+static bool renameBundle(const String& oldName, const String& newName) {
+  if (!oldName.length() || !newName.length()) return false;
+  String oldDir = String(DSP_DIR) + "/" + oldName;
+  String newDir = String(DSP_DIR) + "/" + newName;
+  if (!LittleFS.exists(oldDir) || LittleFS.exists(newDir)) return false;
+  LittleFS.mkdir(newDir);
+  auto copyFile = [](const String& srcPath, const String& dstPath) {
+    File src = LittleFS.open(srcPath, FILE_READ);
+    if (!src) return false;
+    File dst = LittleFS.open(dstPath, FILE_WRITE);
+    if (!dst) { src.close(); return false; }
+    uint8_t buf[256];
+    while (src.available()) {
+      size_t n = src.read(buf, sizeof(buf));
+      dst.write(buf, n);
+    }
+    src.close();
+    dst.close();
+    LittleFS.remove(srcPath);
+    return true;
+  };
+
+  if (LittleFS.exists(oldDir + "/program.bin")) {
+    if (!copyFile(oldDir + "/program.bin", newDir + "/program.bin")) {
+      LittleFS.rmdir(newDir);
+      return false;
+    }
+  }
+  if (LittleFS.exists(oldDir + "/interface.xml")) {
+    if (!copyFile(oldDir + "/interface.xml", newDir + "/interface.xml")) {
+      LittleFS.rmdir(newDir);
+      return false;
+    }
+  }
+  LittleFS.rmdir(oldDir);
+
+  String oldPresetDir = String(DSP_PRESET_DIR) + "/" + oldName;
+  String newPresetDir = String(DSP_PRESET_DIR) + "/" + newName;
+  if (LittleFS.exists(oldPresetDir)) {
+    LittleFS.mkdir(newPresetDir);
+    File entry = LittleFS.open(oldPresetDir);
+    File file = entry.openNextFile();
+    while (file) {
+      String srcPath = file.name();
+      String filename = srcPath.substring(srcPath.lastIndexOf('/') + 1);
+      file.close();
+      if (!copyFile(oldPresetDir + "/" + filename, newPresetDir + "/" + filename)) {
+        entry.close();
+        return false;
+      }
+      file = entry.openNextFile();
+    }
+    entry.close();
+    LittleFS.rmdir(oldPresetDir);
+  }
+  return true;
+}
+
+static bool pushBundleToDsp(const String& name) {
+  if (!name.length()) return false;
+  String program = String(DSP_DIR) + "/" + name + "/program.bin";
+  if (!LittleFS.exists(program)) return false;
+  addLog(String("push dsp bundle requested: ") + name + " (self-boot stub)");
+  return true;
+}
+
+static bool handleDspControlUpdate(JsonObject data) {
+  const char* idStr = data["id"] | "";
+  if (!idStr || !idStr[0]) return false;
+  if (!data.containsKey("value")) return false;
+  float raw = data["value"].as<float>();
+  if (!std::isfinite(raw)) return false;
+  String id(idStr);
+  DspControlSpec* spec = findDspControl(id);
+  if (!spec) return false;
+  float clamped = clampf(raw, spec->min_v, spec->max_v);
+  float current = getDspValue(spec->id);
+  if (!std::isfinite(current) || fabsf(current - clamped) > 0.0001f) {
+    setDspValueInternal(spec->id, clamped, true);
+    addLog(String("dsp control ") + spec->id + " -> " + String(clamped, 3));
+    return true;
+  }
+  return false;
+}
+
 static AsyncJsonResponse* createThermStatusResponse(bool ok, const String& message, int statusCode) {
   auto* resp = new AsyncJsonResponse(false, 1024);
   resp->setCode(statusCode);
@@ -821,97 +1522,6 @@ static AsyncJsonResponse* createThermStatusResponse(bool ok, const String& messa
   return resp;
 }
 
-static bool handleDspUpdate(JsonObject data) {
-  bool changed = false;
-
-  auto updateDb = [&](const char* key, float& target) {
-    if (!data.containsKey(key)) return;
-    float v = data[key].as<float>();
-    if (isnan(v)) return;
-    float clamped = clampf(v, -60.0f, 12.0f);
-    if (fabsf(target - clamped) > 0.0001f) {
-      target = clamped;
-      changed = true;
-    }
-  };
-
-  auto updateRange = [&](const char* key, float& target, float min_v, float max_v) {
-    if (!data.containsKey(key)) return;
-    float v = data[key].as<float>();
-    if (isnan(v)) return;
-    float clamped = clampf(v, min_v, max_v);
-    if (fabsf(target - clamped) > 0.0001f) {
-      target = clamped;
-      changed = true;
-    }
-  };
-
-  updateDb("master_db", settings.dsp_master_db);
-  updateDb("stereo_db", settings.dsp_stereo_db);
-  updateDb("sub_lo_db", settings.dsp_sub_lo_db);
-  updateDb("sub_hi_db", settings.dsp_sub_hi_db);
-
-  updateRange("sub_lo_hp_hz", settings.dsp_sub_lo_hp_hz, 15.0f, 180.0f);
-  updateRange("sub_lo_lp_hz", settings.dsp_sub_lo_lp_hz, 30.0f, 220.0f);
-  updateRange("sub_hi_hp_hz", settings.dsp_sub_hi_hp_hz, 40.0f, 240.0f);
-  updateRange("sub_hi_lp_hz", settings.dsp_sub_hi_lp_hz, 60.0f, 260.0f);
-
-  if (data.containsKey("cross_linked")) {
-    bool v = data["cross_linked"].as<bool>();
-    if (settings.dsp_cross_linked != v) {
-      settings.dsp_cross_linked = v;
-      changed = true;
-    }
-  }
-
-  if (data.containsKey("cross_mains_hz")) {
-    float v = data["cross_mains_hz"].as<float>();
-    if (!isnan(v)) {
-      float clamped = clampf(v, 40.0f, 300.0f);
-      if (fabsf(settings.dsp_cross_mains_hz - clamped) > 0.0001f) {
-        settings.dsp_cross_mains_hz = clamped;
-        changed = true;
-      }
-      if (settings.dsp_cross_linked) {
-        settings.dsp_cross_sub_hz = settings.dsp_cross_mains_hz;
-      }
-    }
-  }
-
-  if (data.containsKey("cross_sub_hz")) {
-    float v = data["cross_sub_hz"].as<float>();
-    if (!isnan(v)) {
-      float clamped = clampf(v, 30.0f, 240.0f);
-      if (fabsf(settings.dsp_cross_sub_hz - clamped) > 0.0001f) {
-        settings.dsp_cross_sub_hz = clamped;
-        changed = true;
-      }
-      if (settings.dsp_cross_linked) {
-        settings.dsp_cross_mains_hz = settings.dsp_cross_sub_hz;
-      }
-    }
-  }
-
-  // Normalise linked crossover values if needed
-  if (settings.dsp_cross_linked) {
-    float linked = clampf(settings.dsp_cross_mains_hz, 40.0f, 240.0f);
-    settings.dsp_cross_mains_hz = linked;
-    settings.dsp_cross_sub_hz = linked;
-  } else {
-    settings.dsp_cross_mains_hz = clampf(settings.dsp_cross_mains_hz, 40.0f, 300.0f);
-    settings.dsp_cross_sub_hz = clampf(settings.dsp_cross_sub_hz, 30.0f, 240.0f);
-  }
-
-  auto enforceRange = [&](float& hp, float& lp, float min_hp, float max_lp) {
-    hp = clampf(hp, min_hp, max_lp - 5.0f);
-    lp = clampf(lp, hp + 5.0f, max_lp);
-  };
-
-  enforceRange(settings.dsp_sub_lo_hp_hz, settings.dsp_sub_lo_lp_hz, 15.0f, 220.0f);
-  enforceRange(settings.dsp_sub_hi_hp_hz, settings.dsp_sub_hi_lp_hz, 40.0f, 260.0f);
-
-  return changed;
-}
 
 // PID controller state
 static float pid_i = 0.0f;
@@ -990,6 +1600,12 @@ void setup() {
 
   settingsLoad(prefs, settings);
   refreshThermistorParams();
+  if (littlefs_ready) {
+    dspInit();
+  } else {
+    dsp_controls.clear();
+    dsp_active_bundle = "";
+  }
 
   StatusLed::setDefault(StatusLed::Status::SystemOk);
   if (!littlefs_ready) {
@@ -1055,6 +1671,8 @@ void loop() {
     wsBroadcastState();
     last_bcast = now;
   }
+
+  flushPendingDspSaves();
 
   StatusLed::Status desired = StatusLed::getDefault();
   if (!littlefs_ready) desired = StatusLed::higherSeverity(desired, StatusLed::Status::GeneralError);

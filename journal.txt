@@ -319,3 +319,20 @@ Prompt: can you please commit everything to main on github and round out the doc
   - Unable to push to `bootbox-mcu-fw.wiki.git` (GitHub still returns 404) so included markdown locally and documented the blocker for follow-up.
 - Release artifacts
   - Rebuilt with `tools/arduino-build.sh --config-file arduino-cli.yaml` ready for packaging/upload after commit.
+Prompt: okay, lets build out the DSP management feature set...
+- firmware/arduino/bootbox_mcu_fw/settings.h
+  - Removed legacy fixed DSP fields from the settings struct/load/save helpers so the new dynamic system owns persistence.
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
+  - Added a full DSP manager: bundle discovery, XML schema parsing, preset storage, debounced value persistence, new `/api/dsp/*` endpoints, and WebSocket/state plumbing.
+  - Reworked `/api/upload/adau` to target bundle folders (`program.bin`/`interface.xml`) and wired the new `/api/dsp/action` handler for select/rename/delete/push + preset operations.
+  - Broadcast the new DSP payload in `/api/state`/WS frames and dropped the static `Settings` fields/handlers.
+- firmware/arduino/bootbox_mcu_fw/data/index.html
+  - Replaced the static DSP mixer with a bundle manager + dynamic controls card, preset chips, and upload UI elements.
+  - Added structural styles for bundle rows, dynamic control cards, preset chips, and status messaging.
+- firmware/arduino/bootbox_mcu_fw/data/app.js
+  - Rebuilt the DSP front-end: dynamic schema rendering, bundle/preset management, REST helpers, upload flow, and WebSocket sync with the new backend contract.
+  - Removed the old hard-coded knob/slider logic, dirty queues, and cross-link toggles; added new state objects and status handling.
+- README.md
+  - Documented the DSP bundle workflow, new endpoints, and interface XML format alongside the updated feature list.
+- docs/wiki/DSP-Control.md & docs/wiki/Web-UI.md
+  - Updated wiki stubs to describe the bundle/schema/preset system and the UI flows.

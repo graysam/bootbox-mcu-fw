@@ -185,6 +185,107 @@
         gap: 14px;
         grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
       }
+      .bundle-summary {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+      .bundle-actions {
+        display: flex;
+        gap: 8px;
+      }
+      .bundle-list {
+        border: 1px solid rgba(40,55,78,0.6);
+        border-radius: 12px;
+        padding: 12px;
+        margin-bottom: 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .bundle-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px;
+        border-radius: 8px;
+        background: rgba(20,28,44,0.6);
+        border: 1px solid rgba(45,62,90,0.6);
+      }
+      .bundle-row.active {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 1px rgba(59,130,246,0.3);
+      }
+      .bundle-row .actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .upload-group {
+        border-top: 1px solid rgba(42,59,84,0.6);
+        padding-top: 16px;
+        margin-top: 16px;
+      }
+      .upload-row {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-bottom: 10px;
+      }
+      .dsp-control-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 16px;
+        margin-bottom: 18px;
+      }
+      .dsp-control-card {
+        border: 1px solid rgba(45,60,88,0.6);
+        border-radius: 12px;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        background: rgba(15,22,35,0.8);
+      }
+      .dsp-control-card .value-sm {
+        font-size: 13px;
+        color: var(--text-muted);
+      }
+      .preset-manager {
+        border-top: 1px solid rgba(42,59,84,0.6);
+        padding-top: 16px;
+      }
+      .preset-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+      .preset-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .preset-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(25,34,52,0.8);
+        border: 1px solid rgba(50,69,102,0.7);
+        font-size: 13px;
+      }
+      .preset-chip button {
+        padding: 2px 6px;
+        font-size: 11px;
+      }
+      .preset-actions {
+        display: flex;
+        gap: 10px;
+      }
       .therm-grid {
         display: grid;
         gap: 20px;
@@ -771,108 +872,87 @@
         </div>
       </section>
 
-      <section class="tab-pane" data-tab="dsp">
-        <article class="card dsp collapsible" data-card="dsp-mixer">
-          <header class="card-header">
-            <div>
-              <h2>DSP Mixer</h2>
-              <span class="muted">Live controls for ADAU1701 routing</span>
+            <section class="tab-pane" data-tab="dsp">
+        <div class="grid">
+          <article class="card dsp-program collapsible" data-card="dsp-program">
+            <header class="card-header">
+              <div>
+                <h2>DSP Programs</h2>
+                <span class="muted">Manage SigmaStudio bundles &amp; generated interfaces</span>
+              </div>
+              <div class="header-actions">
+                <button class="collapse-toggle" aria-label="Toggle DSP programs">
+                  <span class="chevron">▾</span>
+                </button>
+              </div>
+            </header>
+            <div class="card-body">
+              <div class="bundle-summary">
+                <div><span class="label">Active bundle</span> <span id="dsp-active-bundle" class="badge">—</span></div>
+                <div class="bundle-actions">
+                  <button class="secondary" id="dsp-refresh-bundles">Refresh</button>
+                  <button class="secondary" id="dsp-push-active">Push to DSP</button>
+                </div>
+              </div>
+              <div id="dsp-bundle-list" class="bundle-list">
+                <div class="muted">No bundles uploaded yet.</div>
+              </div>
+              <div class="upload-group">
+                <h3>Upload bundle</h3>
+                <div class="upload-row">
+                  <label class="label">Bundle name</label>
+                  <input id="dsp-upload-name" type="text" placeholder="e.g. mains-v1" />
+                </div>
+                <div class="upload-row">
+                  <label class="label">Program (.bin)</label>
+                  <input id="dsp-upload-program" type="file" accept=".bin" />
+                </div>
+                <div class="upload-row">
+                  <label class="label">Interface (.xml)</label>
+                  <input id="dsp-upload-interface" type="file" accept=".xml" />
+                </div>
+                <button id="dsp-upload-submit">Upload bundle</button>
+                <div class="hint" id="dsp-upload-hint">Uploads store files under <code>/dsp/&lt;bundle&gt;/</code>.</div>
+              </div>
+              <div class="status-line" id="dsp-status">Ready.</div>
             </div>
-            <div class="header-actions">
-              <span class="badge value-sm">BETA</span>
-              <button class="collapse-toggle" aria-label="Toggle DSP mixer">
-                <span class="chevron">▾</span>
-              </button>
-            </div>
-          </header>
-          <div class="card-body">
-            <div class="dsp-grid">
-              <div class="knob-block dsp-control" data-param="master_db" data-type="knob" data-min="-60" data-max="12" data-step="0.5" data-unit="dB">
-                <div class="value-display" data-role="display">-6.0 dB</div>
-                <div class="knob-shell" data-role="knob">
-                  <div class="knob-indicator"></div>
-                </div>
-                <div class="label">Master Volume</div>
-              </div>
+          </article>
 
-              <div class="knob-block dsp-control" data-param="stereo_db" data-type="knob" data-min="-40" data-max="12" data-step="0.5" data-unit="dB">
-                <div class="value-display" data-role="display">0.0 dB</div>
-                <div class="knob-shell" data-role="knob">
-                  <div class="knob-indicator"></div>
-                </div>
-                <div class="label">Stereo Gain</div>
+          <article class="card dsp-controls-card collapsible" data-card="dsp-controls">
+            <header class="card-header">
+              <div>
+                <h2>DSP Controls</h2>
+                <span class="muted">Rendered from uploaded interface schema</span>
               </div>
-
-              <div class="knob-block dsp-control" data-param="sub_lo_db" data-type="knob" data-min="-40" data-max="12" data-step="0.5" data-unit="dB">
-                <div class="value-display" data-role="display">0.0 dB</div>
-                <div class="knob-shell" data-role="knob">
-                  <div class="knob-indicator"></div>
-                </div>
-                <div class="label">Sub Low Gain</div>
+              <div class="header-actions">
+                <span class="badge" id="dsp-schema-state">schema pending</span>
+                <button class="collapse-toggle" aria-label="Toggle DSP controls">
+                  <span class="chevron">▾</span>
+                </button>
               </div>
-
-              <div class="knob-block dsp-control" data-param="sub_hi_db" data-type="knob" data-min="-40" data-max="12" data-step="0.5" data-unit="dB">
-                <div class="value-display" data-role="display">0.0 dB</div>
-                <div class="knob-shell" data-role="knob">
-                  <div class="knob-indicator"></div>
-                </div>
-                <div class="label">Sub High Gain</div>
+            </header>
+            <div class="card-body">
+              <div id="dsp-controls" class="dsp-control-grid">
+                <div class="muted">Upload a bundle with an interface file to begin.</div>
               </div>
-            </div>
-
-            <div class="crossover-section">
-              <div class="section-head">
-                <h3 style="margin:0; font-size:16px;">Crossovers</h3>
-                <label class="link-checkbox"><input type="checkbox" id="cross-link" checked /> <span>Link subs &amp; mains</span></label>
-              </div>
-              <div class="crossover-row">
-                <div class="slider-block dsp-control" data-param="cross_mains_hz" data-type="slider" data-min="40" data-max="300" data-step="1" data-unit="Hz">
-                  <div class="label">Mains high-pass</div>
-                  <input type="range" min="40" max="300" step="1" value="120" />
-                  <div class="value-display" data-role="display">120 Hz</div>
+              <div class="preset-manager">
+                <div class="preset-header">
+                  <h3>Presets</h3>
+                  <button class="secondary" id="dsp-refresh-presets">Refresh</button>
                 </div>
-                <div class="slider-block dsp-control" data-param="cross_sub_hz" data-type="slider" data-min="30" data-max="240" data-step="1" data-unit="Hz">
-                  <div class="label">Subs low-pass</div>
-                  <input type="range" min="30" max="240" step="1" value="80" />
-                  <div class="value-display" data-role="display">80 Hz</div>
+                <div id="dsp-preset-list" class="preset-list">
+                  <div class="muted">No presets saved.</div>
                 </div>
-              </div>
-              <div class="fader-grid">
-                <div class="fader-card">
-                  <h4>Sub low band</h4>
-                  <div class="fader-pair">
-                    <div class="fader dsp-control" data-param="sub_lo_hp_hz" data-type="fader" data-min="15" data-max="180" data-step="1" data-unit="Hz">
-                      <input type="range" min="15" max="180" step="1" value="25" />
-                      <div class="value-display" data-role="display">25 Hz</div>
-                      <span class="label">High-pass</span>
-                    </div>
-                    <div class="fader dsp-control" data-param="sub_lo_lp_hz" data-type="fader" data-min="30" data-max="220" data-step="1" data-unit="Hz">
-                      <input type="range" min="30" max="220" step="1" value="80" />
-                      <div class="value-display" data-role="display">80 Hz</div>
-                      <span class="label">Low-pass</span>
-                    </div>
-                  </div>
-                </div>
-                <div class="fader-card">
-                  <h4>Sub high band</h4>
-                  <div class="fader-pair">
-                    <div class="fader dsp-control" data-param="sub_hi_hp_hz" data-type="fader" data-min="40" data-max="240" data-step="1" data-unit="Hz">
-                      <input type="range" min="40" max="240" step="1" value="70" />
-                      <div class="value-display" data-role="display">70 Hz</div>
-                      <span class="label">High-pass</span>
-                    </div>
-                    <div class="fader dsp-control" data-param="sub_hi_lp_hz" data-type="fader" data-min="60" data-max="260" data-step="1" data-unit="Hz">
-                      <input type="range" min="60" max="260" step="1" value="160" />
-                      <div class="value-display" data-role="display">160 Hz</div>
-                      <span class="label">Low-pass</span>
-                    </div>
-                  </div>
+                <div class="preset-actions">
+                  <input id="dsp-preset-name" type="text" placeholder="Preset name" />
+                  <button id="dsp-preset-save">Save current values</button>
                 </div>
               </div>
             </div>
-          </div>
-        </article>
+          </article>
+        </div>
       </section>
+
 
       <section class="tab-pane" data-tab="system">
         <div class="grid">

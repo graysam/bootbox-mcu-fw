@@ -31,7 +31,6 @@ const S = {
   uploadInput: $('upload-input'),
   uploadStatus: $('upload-status'),
   toastStack: $('toast-stack'),
-  crossLink: $('cross-link'),
   liveSp1: $('live-sp1'),
   liveSp2: $('live-sp2'),
   liveKp: $('live-kp'),
@@ -62,42 +61,49 @@ const S = {
   thermClear: $('therm-clear'),
   thermMessage: $('therm-message'),
   thermSession: $('therm-session'),
-  thermTableBody: $('therm-table-body')
+  thermTableBody: $('therm-table-body'),
+  dspControls: $('dsp-controls'),
+  dspActiveBundle: $('dsp-active-bundle'),
+  dspStatus: $('dsp-status'),
+  dspBundleList: $('dsp-bundle-list'),
+  dspUploadName: $('dsp-upload-name'),
+  dspUploadProgram: $('dsp-upload-program'),
+  dspUploadInterface: $('dsp-upload-interface'),
+  dspUploadSubmit: $('dsp-upload-submit'),
+  dspSchemaState: $('dsp-schema-state'),
+  dspPresetList: $('dsp-preset-list'),
+  dspPresetName: $('dsp-preset-name'),
+  dspPresetSave: $('dsp-preset-save'),
+  dspRefreshBundles: $('dsp-refresh-bundles'),
+  dspPushActive: $('dsp-push-active'),
+  dspRefreshPresets: $('dsp-refresh-presets')
 };
 
   const stateCache = {
     fanCount: 1,
     pidEnabled: true,
     manualPct: 30,
-  awaitingApply: false,
-  modeDirty: false,
-  manualDirty: false,
-  appliedPid: true,
-  appliedManualPct: 30,
-  dsp: {},
-  sys: {},
-  therm: {
-    calibrations: [],
-    session: {}
-  }
-};
+    awaitingApply: false,
+    modeDirty: false,
+    manualDirty: false,
+    appliedPid: true,
+    appliedManualPct: 30,
+    sys: {},
+    therm: {
+      calibrations: [],
+      session: {}
+    }
+  };
   let thermBusy = false;
-
-  const DSP_META = {
-    master_db: { unit: 'dB', decimals: 1, min: -60, max: 12, step: 0.5 },
-    stereo_db: { unit: 'dB', decimals: 1, min: -40, max: 12, step: 0.5 },
-    sub_lo_db: { unit: 'dB', decimals: 1, min: -40, max: 12, step: 0.5 },
-    sub_hi_db: { unit: 'dB', decimals: 1, min: -40, max: 12, step: 0.5 },
-    cross_mains_hz: { unit: 'Hz', decimals: 0, min: 40, max: 300, step: 1 },
-    cross_sub_hz: { unit: 'Hz', decimals: 0, min: 30, max: 240, step: 1 },
-    sub_lo_hp_hz: { unit: 'Hz', decimals: 0, min: 15, max: 180, step: 1 },
-    sub_lo_lp_hz: { unit: 'Hz', decimals: 0, min: 30, max: 220, step: 1 },
-    sub_hi_hp_hz: { unit: 'Hz', decimals: 0, min: 40, max: 240, step: 1 },
-    sub_hi_lp_hz: { unit: 'Hz', decimals: 0, min: 60, max: 260, step: 1 },
-    cross_linked: { unit: '', type: 'bool' }
+  const dspControlElements = new Map();
+  const dspView = {
+    schema: [],
+    values: {},
+    bundles: [],
+    presets: [],
+    activeBundle: ''
   };
 
-  const dspControls = {};
   const thermalFields = {
     sp1: {
       el: S.sp1,
@@ -140,8 +146,6 @@ const S = {
   const pending = new Map();
   let lastUpdateTs = 0;
   let reconnectBackoff = 500;
-  let pendingDsp = {};
-  let dspFlushTimer = null;
   const TAB_STORAGE_KEY = 'bootbox:tab';
   const CARD_STORAGE_KEY = 'bootbox:cards';
 
@@ -366,38 +370,6 @@ const S = {
     }
   }
 
-  function queueDspUpdate(param, value, immediate = false) {
-    pendingDsp[param] = value;
-    if (immediate) {
-      flushDspUpdates();
-      return;
-    }
-    if (dspFlushTimer) return;
-    dspFlushTimer = setTimeout(flushDspUpdates, 70);
-  }
-
-  function flushDspUpdates() {
-    if (dspFlushTimer) {
-      clearTimeout(dspFlushTimer);
-      dspFlushTimer = null;
-    }
-    const keys = Object.keys(pendingDsp);
-    if (!keys.length) return;
-    send('set_dsp', { ...pendingDsp });
-    pendingDsp = {};
-  }
-
-  function formatValue(param, value) {
-    const meta = DSP_META[param];
-    if (!meta) return `${value}`;
-    const decimals = meta.decimals ?? 2;
-    const rounded = value.toFixed(decimals);
-    const cleaned = decimals ? parseFloat(rounded).toFixed(decimals) : Math.round(value).toString();
-    if (meta.unit === 'dB') return `${parseFloat(cleaned)} dB`;
-    if (meta.unit === 'Hz') return `${Math.round(value)} Hz`;
-    return cleaned;
-  }
-
   function hasDirtyThermalInputs() {
     return Object.values(thermalFields).some((field) => field.el?.dataset?.dirty === 'true');
   }
@@ -545,188 +517,6 @@ const S = {
     S.manpctValue.textContent = `${pct}%${pendingLabel ? ' (pending)' : ''}`;
   }
 
-  function updateKnobVisual(ctrl) {
-    const meta = DSP_META[ctrl.param];
-    const ratio = (ctrl.value - ctrl.min) / (ctrl.max - ctrl.min);
-    const angle = -135 + ratio * 270;
-    if (ctrl.indicator) ctrl.indicator.style.transform = `rotate(${angle}deg)`;
-    if (ctrl.display) ctrl.display.textContent = formatValue(ctrl.param, ctrl.value);
-  }
-
-  function updateSliderVisual(ctrl) {
-    if (ctrl.input) ctrl.input.value = ctrl.value;
-    if (ctrl.display) ctrl.display.textContent = formatValue(ctrl.param, ctrl.value);
-  }
-
-  function setControlValue(param, value, options = {}) {
-    const ctrl = dspControls[param];
-    if (!ctrl) return;
-    const { fromState = false, immediate = false, mirror = false } = options;
-    if (fromState && ctrl.active) {
-      return;
-    }
-    const meta = DSP_META[param] || {};
-    const min = ctrl.min ?? meta.min ?? -100;
-    const max = ctrl.max ?? meta.max ?? 100;
-    const step = ctrl.step ?? meta.step ?? 0.1;
-    const prev = ctrl.value;
-    let clamped = clamp(value, min, max);
-    clamped = Math.round(clamped / step) * step;
-    if (fromState && prev !== undefined && Math.abs(prev - clamped) <= step * 0.25) {
-      return;
-    }
-    if (ctrl.value !== undefined && Math.abs(ctrl.value - clamped) < step * 0.25 && fromState) {
-      return;
-    }
-    ctrl.value = clamped;
-    if (ctrl.type === 'knob') updateKnobVisual(ctrl);
-    else updateSliderVisual(ctrl);
-
-    if (!fromState) {
-      queueDspUpdate(param, clamped, immediate);
-    }
-
-    if (!mirror) {
-      // linked crossover updates
-      if (param === 'cross_mains_hz' && S.crossLink?.checked) {
-        setControlValue('cross_sub_hz', clamped, { fromState, immediate, mirror: true });
-      } else if (param === 'cross_sub_hz' && S.crossLink?.checked) {
-        setControlValue('cross_mains_hz', clamped, { fromState, immediate, mirror: true });
-      }
-      // Ensure ranges obey ordering visually
-      if (param === 'sub_lo_hp_hz') {
-        const minGap = 5;
-        if ((dspControls.sub_lo_lp_hz?.value ?? clamped) < clamped + minGap) {
-          setControlValue('sub_lo_lp_hz', clamped + minGap, { fromState, immediate, mirror: true });
-        }
-      } else if (param === 'sub_lo_lp_hz') {
-        const minGap = 5;
-        if ((dspControls.sub_lo_hp_hz?.value ?? clamped) > clamped - minGap) {
-          setControlValue('sub_lo_hp_hz', clamped - minGap, { fromState, immediate, mirror: true });
-        }
-      } else if (param === 'sub_hi_hp_hz') {
-        const minGap = 5;
-        if ((dspControls.sub_hi_lp_hz?.value ?? clamped) < clamped + minGap) {
-          setControlValue('sub_hi_lp_hz', clamped + minGap, { fromState, immediate, mirror: true });
-        }
-      } else if (param === 'sub_hi_lp_hz') {
-        const minGap = 5;
-        if ((dspControls.sub_hi_hp_hz?.value ?? clamped) > clamped - minGap) {
-          setControlValue('sub_hi_hp_hz', clamped - minGap, { fromState, immediate, mirror: true });
-        }
-      }
-    }
-  }
-
-  function initKnobControl(ctrl) {
-    const knob = ctrl.element.querySelector('[data-role="knob"]');
-    const indicator = knob?.querySelector('.knob-indicator');
-    ctrl.knob = knob;
-    ctrl.indicator = indicator;
-    ctrl.display = ctrl.element.querySelector('[data-role="display"]');
-    ctrl.type = 'knob';
-    ctrl.active = false;
-
-    if (!knob) return;
-    knob.addEventListener('pointerdown', (ev) => {
-      ev.preventDefault();
-      knob.setPointerCapture(ev.pointerId);
-      const startY = ev.clientY;
-      const startVal = ctrl.value ?? 0;
-      const span = ctrl.max - ctrl.min;
-      const sensitivity = span / 250;
-      ctrl.active = true;
-      if (indicator) indicator.style.transition = 'none';
-      const move = (moveEv) => {
-        const delta = (startY - moveEv.clientY) * sensitivity;
-        const next = startVal + delta;
-        setControlValue(ctrl.param, next, { fromState: false });
-      };
-      const up = (upEv) => {
-        knob.releasePointerCapture(upEv.pointerId);
-        knob.removeEventListener('pointermove', move);
-        knob.removeEventListener('pointerup', up);
-        knob.removeEventListener('pointercancel', up);
-        ctrl.active = false;
-        if (indicator) indicator.style.transition = '';
-        setControlValue(ctrl.param, ctrl.value, { fromState: false, immediate: true });
-      };
-      knob.addEventListener('pointermove', move);
-      knob.addEventListener('pointerup', up);
-      knob.addEventListener('pointercancel', up);
-    });
-
-    if (ctrl.display) {
-      ctrl.display.addEventListener('click', () => {
-        const current = ctrl.value ?? 0;
-        const input = prompt(`Set ${ctrl.param}`, current.toFixed(ctrl.decimals ?? 1));
-        if (input === null) return;
-        const parsed = Number.parseFloat(input);
-        if (Number.isFinite(parsed)) {
-          setControlValue(ctrl.param, parsed, { fromState: false, immediate: true });
-        } else {
-          showToast('Invalid number', 'error', 1800);
-        }
-      });
-    }
-  }
-
-  function initSliderControl(ctrl) {
-    const slider = ctrl.element.querySelector('input[type="range"]');
-    ctrl.input = slider;
-    ctrl.display = ctrl.element.querySelector('[data-role="display"]');
-    ctrl.type = ctrl.element.dataset.type || 'slider';
-    ctrl.active = false;
-    if (!slider) return;
-
-    slider.addEventListener('input', () => {
-      ctrl.active = true;
-      setControlValue(ctrl.param, Number(slider.value), { fromState: false });
-    });
-    slider.addEventListener('change', () => {
-      ctrl.active = false;
-      setControlValue(ctrl.param, Number(slider.value), { fromState: false, immediate: true });
-    });
-  }
-
-  function initDspControls() {
-    document.querySelectorAll('.dsp-control').forEach((el) => {
-      const param = el.dataset.param;
-      if (!param) return;
-      const meta = DSP_META[param] || {};
-      const ctrl = {
-        param,
-        element: el,
-        min: Number.parseFloat(el.dataset.min ?? meta.min ?? 0),
-        max: Number.parseFloat(el.dataset.max ?? meta.max ?? 0),
-        step: Number.parseFloat(el.dataset.step ?? meta.step ?? 1),
-        decimals: meta.decimals ?? 1,
-        unit: meta.unit || ''
-      };
-      if ((el.dataset.type || '').includes('knob')) {
-        initKnobControl(ctrl);
-      } else {
-        initSliderControl(ctrl);
-      }
-      dspControls[param] = ctrl;
-    });
-  }
-
-  function updateDspFromState(dspState) {
-    if (!dspState) return;
-    Object.keys(dspState).forEach((param) => {
-      const value = dspState[param];
-      stateCache.dsp[param] = value;
-      setControlValue(param, value, { fromState: true });
-    });
-    if (typeof dspState.cross_linked === 'boolean' && S.crossLink) {
-      const checked = !!dspState.cross_linked;
-      if (S.crossLink.checked !== checked) {
-        S.crossLink.checked = checked;
-      }
-    }
-  }
-
   function connectWS() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const url = `${proto}://${location.host}/ws`;
@@ -857,7 +647,15 @@ const S = {
       setFormStatus('Latest data received from controller', 'success');
     }
 
-    updateDspFromState(dsp);
+    if (dsp.bundle) {
+      dspView.activeBundle = dsp.bundle;
+      updateBundleBadge();
+      renderBundleList();
+    }
+    if (dsp.values && typeof dsp.values === 'object') {
+      dspView.values = { ...dspView.values, ...dsp.values };
+      updateDspControlValues();
+    }
     updateSystemInfo(sys);
   }
 
@@ -866,6 +664,333 @@ const S = {
     S.log.textContent = lines.join('\n');
     if (S.autoScroll?.checked) {
       S.log.scrollTop = S.log.scrollHeight;
+    }
+  }
+
+  async function apiFetch(url, options = {}) {
+    const res = await fetch(url, options);
+    const data = await res.json();
+    if (!res.ok || data?.ok === false) {
+      const message = (data && data.message) || res.statusText || 'Request failed';
+      throw new Error(message);
+    }
+    return data;
+  }
+
+  function setDspStatus(message, variant = '') {
+    if (!S.dspStatus) return;
+    S.dspStatus.textContent = message;
+    S.dspStatus.classList.remove('success', 'error', 'pending');
+    if (variant) S.dspStatus.classList.add(variant);
+  }
+
+  async function refreshDspBundles() {
+    if (!S.dspBundleList) return;
+    try {
+      const data = await apiFetch('/api/dsp/bundles');
+      dspView.bundles = data.bundles || [];
+      if (data.active) dspView.activeBundle = data.active;
+      renderBundleList();
+    } catch (err) {
+      setDspStatus(err.message || 'Failed to load bundles', 'error');
+    }
+  }
+
+  async function refreshDspSchema() {
+    if (!S.dspControls) return;
+    try {
+      const data = await apiFetch('/api/dsp/schema');
+      dspView.schema = data.controls || [];
+      dspView.values = data.values || {};
+      if (data.active) dspView.activeBundle = data.active;
+      dspView.presets = data.presets || [];
+      renderDspControls();
+      renderPresetList();
+      updateBundleBadge();
+      updateSchemaBadge(true);
+    } catch (err) {
+      dspView.schema = [];
+      dspView.values = {};
+      updateSchemaBadge(false);
+      setDspStatus(err.message || 'Failed to load schema', 'error');
+    }
+  }
+
+  function updateBundleBadge() {
+    if (S.dspActiveBundle) {
+      S.dspActiveBundle.textContent = dspView.activeBundle || '—';
+    }
+  }
+
+  function updateSchemaBadge(ready) {
+    if (!S.dspSchemaState) return;
+    S.dspSchemaState.textContent = ready ? 'schema ready' : 'schema pending';
+  }
+
+  function renderBundleList() {
+    if (!S.dspBundleList) return;
+    S.dspBundleList.innerHTML = '';
+    if (!dspView.bundles.length) {
+      S.dspBundleList.innerHTML = '<div class=\"muted\">No bundles uploaded yet.</div>';
+      return;
+    }
+    dspView.bundles.forEach((bundle) => {
+      const row = document.createElement('div');
+      row.className = 'bundle-row';
+      if (bundle.active) row.classList.add('active');
+      const left = document.createElement('div');
+      left.innerHTML = `<strong>${bundle.name}</strong><br><span class=\"muted\">${bundle.has_interface ? 'Interface' : 'No interface'}</span>`;
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+
+      const activate = document.createElement('button');
+      activate.className = 'secondary';
+      activate.textContent = 'Activate';
+      activate.disabled = bundle.active;
+      activate.addEventListener('click', () => changeBundle(bundle.name));
+
+      const pushBtn = document.createElement('button');
+      pushBtn.className = 'secondary';
+      pushBtn.textContent = 'Push';
+      pushBtn.addEventListener('click', () => triggerPush(bundle.name));
+
+      const renameBtn = document.createElement('button');
+      renameBtn.className = 'secondary';
+      renameBtn.textContent = 'Rename';
+      renameBtn.addEventListener('click', () => renameBundle(bundle.name));
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'secondary';
+      deleteBtn.textContent = 'Delete';
+      deleteBtn.addEventListener('click', () => deleteBundle(bundle.name));
+
+      actions.append(activate, pushBtn, renameBtn, deleteBtn);
+      row.append(left, actions);
+      S.dspBundleList.appendChild(row);
+    });
+  }
+
+  async function changeBundle(name) {
+    try {
+      await dspAction('select_bundle', { name });
+      setDspStatus(`Activated bundle ${name}`, 'success');
+      await Promise.all([refreshDspBundles(), refreshDspSchema()]);
+    } catch (err) {
+      setDspStatus(err.message, 'error');
+    }
+  }
+
+  async function triggerPush(name) {
+    try {
+      await dspAction('push_bundle', { name });
+      showToast(`Pushed ${name} (self-boot)`, 'info', 2000);
+    } catch (err) {
+      setDspStatus(err.message, 'error');
+    }
+  }
+
+  async function renameBundle(oldName) {
+    const newName = prompt('Enter new bundle name', oldName);
+    if (!newName || newName === oldName) return;
+    try {
+      await dspAction('rename_bundle', { name: oldName, new_name: newName });
+      setDspStatus(`Renamed to ${newName}`, 'success');
+      await refreshDspBundles();
+    } catch (err) {
+      setDspStatus(err.message, 'error');
+    }
+  }
+
+  async function deleteBundle(name) {
+    if (!confirm(`Delete bundle ${name}?`)) return;
+    try {
+      await dspAction('delete_bundle', { name });
+      setDspStatus(`Deleted bundle ${name}`, 'success');
+      await Promise.all([refreshDspBundles(), refreshDspSchema()]);
+    } catch (err) {
+      setDspStatus(err.message, 'error');
+    }
+  }
+
+  function renderDspControls() {
+    if (!S.dspControls) return;
+    dspControlElements.clear();
+    S.dspControls.innerHTML = '';
+    if (!dspView.schema.length) {
+      S.dspControls.innerHTML = '<div class=\"muted\">Upload a bundle with an interface file to begin.</div>';
+      return;
+    }
+    dspView.schema.forEach((spec) => {
+      const card = document.createElement('div');
+      card.className = 'dsp-control-card';
+      const label = document.createElement('div');
+      label.className = 'label';
+      label.textContent = spec.label || spec.id;
+      card.appendChild(label);
+      const valueLabel = document.createElement('div');
+      valueLabel.className = 'value-sm';
+      valueLabel.textContent = '—';
+      let input;
+      if (spec.type === 'toggle') {
+        input = document.createElement('input');
+        input.type = 'checkbox';
+        input.addEventListener('change', () => {
+          sendDspValue(spec.id, input.checked ? spec.max : spec.min);
+        });
+      } else {
+        input = document.createElement('input');
+        input.type = 'range';
+        input.min = spec.min ?? 0;
+        input.max = spec.max ?? 1;
+        input.step = spec.step ?? 0.1;
+        input.addEventListener('input', () => {
+          valueLabel.textContent = formatDspValue(spec, Number(input.value));
+        });
+        input.addEventListener('change', () => {
+          sendDspValue(spec.id, Number(input.value));
+        });
+      }
+      card.appendChild(input);
+      card.appendChild(valueLabel);
+      dspControlElements.set(spec.id, { spec, input, valueLabel });
+      S.dspControls.appendChild(card);
+    });
+    updateDspControlValues();
+  }
+
+  function formatDspValue(spec, value) {
+    const decimals = spec.decimals ?? (spec.step && spec.step < 1 ? 2 : 0);
+    const val = Number(value).toFixed(decimals);
+    return spec.unit ? `${val} ${spec.unit}` : val;
+  }
+
+  function updateDspControlValues() {
+    dspControlElements.forEach((entry, id) => {
+      const value = Number(dspView.values[id]);
+      if (!Number.isFinite(value)) return;
+      if (entry.input.type === 'checkbox') {
+        entry.input.checked = value > ((entry.spec.min ?? 0) + (entry.spec.max ?? 1)) / 2;
+      } else {
+        entry.input.value = value;
+      }
+      if (entry.valueLabel) {
+        entry.valueLabel.textContent = formatDspValue(entry.spec, value);
+      }
+    });
+  }
+
+  async function sendDspValue(id, value) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      showToast('Controller offline – unable to update DSP', 'warn', 2000);
+      return;
+    }
+    send('set_dsp', { id, value });
+  }
+
+  function renderPresetList() {
+    if (!S.dspPresetList) return;
+    S.dspPresetList.innerHTML = '';
+    if (!dspView.presets.length) {
+      S.dspPresetList.innerHTML = '<div class=\"muted\">No presets saved.</div>';
+      return;
+    }
+    dspView.presets.forEach((preset) => {
+      const chip = document.createElement('div');
+      chip.className = 'preset-chip';
+      chip.textContent = preset;
+      const loadBtn = document.createElement('button');
+      loadBtn.className = 'secondary';
+      loadBtn.textContent = 'Load';
+      loadBtn.addEventListener('click', () => loadPreset(preset));
+      const delBtn = document.createElement('button');
+      delBtn.className = 'secondary';
+      delBtn.textContent = '✕';
+      delBtn.addEventListener('click', () => deletePreset(preset));
+      chip.append(loadBtn, delBtn);
+      S.dspPresetList.appendChild(chip);
+    });
+  }
+
+  async function savePresetFromUi() {
+    const name = S.dspPresetName?.value?.trim();
+    if (!name) {
+      showToast('Enter a preset name first', 'warn', 2000);
+      return;
+    }
+    try {
+      await dspAction('save_preset', { bundle: dspView.activeBundle, preset: name });
+      showToast(`Preset ${name} saved`, 'success', 2000);
+      S.dspPresetName.value = '';
+      refreshDspSchema();
+    } catch (err) {
+      setDspStatus(err.message, 'error');
+    }
+  }
+
+  async function loadPreset(name) {
+    try {
+      await dspAction('load_preset', { bundle: dspView.activeBundle, preset: name });
+      setDspStatus(`Preset ${name} loaded`, 'success');
+      await refreshDspSchema();
+    } catch (err) {
+      setDspStatus(err.message, 'error');
+    }
+  }
+
+  async function deletePreset(name) {
+    if (!confirm(`Delete preset ${name}?`)) return;
+    try {
+      await dspAction('delete_preset', { bundle: dspView.activeBundle, preset: name });
+      showToast(`Preset ${name} deleted`, 'info', 2000);
+      refreshDspSchema();
+    } catch (err) {
+      setDspStatus(err.message, 'error');
+    }
+  }
+
+  async function dspAction(action, payload = {}) {
+    payload.action = action;
+    const res = await fetch('/api/dsp/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!res.ok || data.ok === false) {
+      throw new Error(data.message || 'DSP action failed');
+    }
+    return data;
+  }
+
+  async function handleBundleUpload() {
+    if (!S.dspUploadName || !S.dspUploadProgram || !S.dspUploadInterface) return;
+    const bundle = S.dspUploadName.value.trim();
+    const programFile = S.dspUploadProgram.files[0];
+    const interfaceFile = S.dspUploadInterface.files[0];
+    if (!bundle || !programFile || !interfaceFile) {
+      setDspStatus('Provide bundle name, program, and interface files', 'error');
+      return;
+    }
+    try {
+      await uploadBundleFile(bundle, 'program', programFile);
+      await uploadBundleFile(bundle, 'interface', interfaceFile);
+      setDspStatus(`Bundle ${bundle} uploaded`, 'success');
+      S.dspUploadProgram.value = '';
+      S.dspUploadInterface.value = '';
+      await Promise.all([refreshDspBundles(), refreshDspSchema()]);
+    } catch (err) {
+      setDspStatus(err.message || 'Upload failed', 'error');
+    }
+  }
+
+  async function uploadBundleFile(bundle, kind, file) {
+    const url = `/api/upload/adau?bundle=${encodeURIComponent(bundle)}&kind=${encodeURIComponent(kind)}`;
+    const form = new FormData();
+    form.append('file', file, file.name);
+    const res = await fetch(url, { method: 'POST', body: form });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || `Failed to upload ${kind}`);
     }
   }
 
@@ -959,13 +1084,13 @@ const S = {
     S.uploadInput.addEventListener('change', (ev) => handleUpload(ev.target.files?.[0] ?? null));
   }
 
-  if (S.crossLink) {
-    S.crossLink.addEventListener('change', () => {
-      const linked = !!S.crossLink.checked;
-      queueDspUpdate('cross_linked', linked, true);
-      showToast(linked ? 'Crossovers linked' : 'Crossovers unlinked', linked ? 'success' : 'warn', 1600);
-    });
-  }
+  S.dspRefreshBundles?.addEventListener('click', refreshDspBundles);
+  S.dspRefreshPresets?.addEventListener('click', refreshDspSchema);
+  S.dspPushActive?.addEventListener('click', () => {
+    if (dspView.activeBundle) triggerPush(dspView.activeBundle);
+  });
+  S.dspUploadSubmit?.addEventListener('click', handleBundleUpload);
+  S.dspPresetSave?.addEventListener('click', savePresetFromUi);
 
   if (S.thermNominal && !S.thermNominal.value) {
     S.thermNominal.value = '25.0';
@@ -1051,9 +1176,9 @@ const S = {
 
   setInterval(() => send('ping'), 5000);
   setInterval(updateLastUpdateLabel, 1000);
-  window.addEventListener('beforeunload', flushDspUpdates);
 
-  initDspControls();
+  refreshDspBundles();
+  refreshDspSchema();
   Object.entries(thermalFields).forEach(([key, field]) => {
     if (!field.el || !field.live) return;
     field.el.addEventListener('input', () => {
