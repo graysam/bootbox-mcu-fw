@@ -58,3 +58,16 @@ static constexpr float ADC_FULL_SCALE = 4095.0f;
 // Optional serial logging for thermistor calibration (disabled in production).
 static constexpr bool THERMISTOR_DEBUG_LOG = false;
 static constexpr uint32_t THERMISTOR_DEBUG_INTERVAL_MS = 5000;
+
+// -------- ADAU1701 / I2C config --------
+static constexpr int PIN_I2C_SDA = 21;
+static constexpr int PIN_I2C_SCL = 22;
+static constexpr uint32_t I2C_FREQUENCY_HZ = 400000;
+
+static constexpr uint8_t ADAU_I2C_ADDR = 0x34;        // 7-bit address for ADAU1701 core
+static constexpr uint8_t ADAU_EEPROM_I2C_ADDR = 0x50; // common 24LC256 address
+static constexpr size_t ADAU_EEPROM_PAGE_BYTES = 32;
+static constexpr size_t ADAU_EEPROM_SIZE_BYTES = 32768;
+
+static constexpr int PIN_ADAU_RESET = -1; // set to GPIO if reset is controllable
+static constexpr bool ADAU_RESET_ACTIVE_LOW = true;

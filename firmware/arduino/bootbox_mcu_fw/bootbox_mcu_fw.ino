@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <Wire.h>
 #include <LittleFS.h>
 #include <Preferences.h>
 #include <AsyncTCP.h>
@@ -9,6 +10,7 @@
 #include <esp32-hal-ledc.h>
 #include <esp_system.h>
 #include <vector>
+#include <algorithm>
 #include <deque>
 #include <cstddef>
 #include <cmath>
@@ -59,6 +61,15 @@ static const char DSP_PRESET_DIR[] = "/dsp-presets";
 static constexpr size_t DSP_MAX_CONTROLS = 48;
 static constexpr uint32_t DSP_SAVE_DELAY_MS = 1200;
 
+enum class DspValueFormat : uint8_t {
+  Fixed523,
+  Unsigned8,
+  Unsigned16,
+  Unsigned24,
+  Unsigned32,
+  Raw
+};
+
 struct DspControlSpec {
   String id;
   String label;
@@ -70,7 +81,7 @@ struct DspControlSpec {
   float default_v = NAN;
   uint32_t address = 0;
   uint8_t bytes = 4;
-  String format = "float"; // float, fixed, etc.
+  DspValueFormat format = DspValueFormat::Fixed523;
 };
 
 struct DspValueEntry {
@@ -84,6 +95,8 @@ static String dsp_active_bundle;
 static bool dsp_schema_ready = false;
 static bool dsp_values_dirty = false;
 static uint32_t dsp_values_dirty_since = 0;
+static bool adau_ready = false;
+static String adau_last_error;
 
 struct DspPresetInfo {
   String name;
@@ -99,11 +112,19 @@ static bool handleDspControlUpdate(JsonObject data);
 static void markDspValuesDirty();
 static void flushPendingDspSaves();
 static bool savePreset(const String& bundle, const String& presetName);
-static bool applyPreset(const String& bundle, const String& presetName);
+static bool applyPreset(const String& bundle, const String& presetName, String* errorMessage = nullptr, int* statusCode = nullptr);
 static bool deletePreset(const String& bundle, const String& presetName);
 static bool deleteBundle(const String& name);
 static bool renameBundle(const String& oldName, const String& newName);
 static bool pushBundleToDsp(const String& name);
+static bool adauInit();
+static void adauSetError(const String& msg);
+static bool adauTriggerSelfboot();
+static bool adauWriteProgramToEeprom(const String& path);
+static bool adauWriteRegister(uint16_t addr, const uint8_t* data, size_t len);
+static uint32_t floatToFixed523(float value);
+static bool applyDspValueToHardware(const DspControlSpec& spec, float value);
+static void applyAllDspValuesToHardware();
 
 static inline bool fanSlotEnabled(size_t idx) {
   return idx < FAN_SLOT_COUNT && FAN_CTRL_PINS[idx] >= 0 && FAN_PWM_CHANNELS[idx] >= 0;
@@ -473,8 +494,13 @@ static void registerHttpRoutes() {
   });
 
   server.on("/api/dsp/schema", HTTP_GET, [](AsyncWebServerRequest* req){
-    StaticJsonDocument<2048> doc;
+    StaticJsonDocument<2304> doc;
     doc["active"] = dsp_active_bundle;
+    doc["schema_ready"] = dsp_schema_ready;
+    doc["hw_ready"] = adau_ready;
+    if (adau_last_error.length()) {
+      doc["hw_error"] = adau_last_error;
+    }
     auto controls = doc.createNestedArray("controls");
     for (const auto& spec : dsp_controls) {
       auto c = controls.createNestedObject();
@@ -486,7 +512,7 @@ static void registerHttpRoutes() {
       c["max"] = spec.max_v;
       c["step"] = spec.step;
       if (!std::isnan(spec.default_v)) c["default"] = spec.default_v;
-      c["format"] = spec.format;
+      c["format"] = formatToString(spec.format);
     }
     auto values = doc.createNestedObject("values");
     for (const auto& entry : dsp_values) {
@@ -603,7 +629,8 @@ static void registerHttpRoutes() {
         if (pushBundleToDsp(name)) {
           sendResponse(true, "bundle_pushed", 200);
         } else {
-          sendResponse(false, "push_failed", 500);
+          String msg = adau_last_error.length() ? adau_last_error : "push_failed";
+          sendResponse(false, msg, 500);
         }
         return;
       }
@@ -633,12 +660,15 @@ static void registerHttpRoutes() {
           sendResponse(false, "preset_required", 400);
           return;
         }
-        if (applyPreset(bundle, preset)) {
+        String presetErr;
+        int presetStatus = 500;
+        if (applyPreset(bundle, preset, &presetErr, &presetStatus)) {
           addLog(String("preset loaded: ") + bundle + "/" + preset);
           wsBroadcastState();
           sendResponse(true, "preset_loaded", 200);
         } else {
-          sendResponse(false, "preset_load_failed", 500);
+          String msg = presetErr.length() ? presetErr : "preset_load_failed";
+          sendResponse(false, msg, presetStatus);
         }
         return;
       }
@@ -1075,6 +1105,29 @@ static void fillSystemInfo(JsonObject obj) {
 
 // ---- DSP interface helpers ----
 
+static DspValueFormat formatFromString(const String& token) {
+  String lower = token;
+  lower.toLowerCase();
+  if (lower == "u8") return DspValueFormat::Unsigned8;
+  if (lower == "u16") return DspValueFormat::Unsigned16;
+  if (lower == "u24") return DspValueFormat::Unsigned24;
+  if (lower == "u32") return DspValueFormat::Unsigned32;
+  if (lower == "raw") return DspValueFormat::Raw;
+  return DspValueFormat::Fixed523;
+}
+
+static const char* formatToString(DspValueFormat fmt) {
+  switch (fmt) {
+    case DspValueFormat::Unsigned8: return "u8";
+    case DspValueFormat::Unsigned16: return "u16";
+    case DspValueFormat::Unsigned24: return "u24";
+    case DspValueFormat::Unsigned32: return "u32";
+    case DspValueFormat::Raw: return "raw";
+    case DspValueFormat::Fixed523:
+    default: return "fixed5.23";
+  }
+}
+
 static DspControlSpec* findDspControl(const String& id) {
   for (auto& spec : dsp_controls) {
     if (spec.id == id) return &spec;
@@ -1230,7 +1283,7 @@ static bool parseDspInterface(const String& path, std::vector<DspControlSpec>& o
       else if (key == "default") spec.default_v = value.toFloat();
       else if (key == "address") spec.address = strtoul(value.c_str(), nullptr, 0);
       else if (key == "bytes") spec.bytes = static_cast<uint8_t>(value.toInt());
-      else if (key == "format") spec.format = value;
+      else if (key == "format") spec.format = formatFromString(value);
     }
 
     if (!spec.id.length()) continue;
@@ -1238,6 +1291,11 @@ static bool parseDspInterface(const String& path, std::vector<DspControlSpec>& o
     if (spec.step <= 0.0f) spec.step = 0.1f;
     if (spec.max_v <= spec.min_v) spec.max_v = spec.min_v + spec.step;
     if (spec.bytes == 0) spec.bytes = 4;
+    if (spec.type == "toggle") {
+      spec.min_v = 0.0f;
+      spec.max_v = 1.0f;
+      spec.step = 1.0f;
+    }
     out.push_back(spec);
     if (out.size() >= DSP_MAX_CONTROLS) break;
   }
@@ -1278,6 +1336,7 @@ static bool loadDspBundle(const String& name, bool persist) {
   }
   dsp_controls = parsed;
   syncDspValuesWithControls();
+  if (adau_ready) applyAllDspValuesToHardware();
   dsp_active_bundle = target;
   dsp_schema_ready = true;
   if (persist) prefs.putString("dspBundle", target);
@@ -1287,6 +1346,8 @@ static bool loadDspBundle(const String& name, bool persist) {
 static void populateDspState(JsonObject obj) {
   obj["bundle"] = dsp_active_bundle;
   obj["schema_ready"] = dsp_schema_ready;
+  obj["hw_ready"] = adau_ready;
+  if (adau_last_error.length()) obj["hw_error"] = adau_last_error;
   auto values = obj.createNestedObject("values");
   for (const auto& entry : dsp_values) {
     values[entry.id] = entry.value;
@@ -1359,17 +1420,33 @@ static bool savePreset(const String& bundle, const String& presetName) {
   return true;
 }
 
-static bool applyPreset(const String& bundle, const String& presetName) {
-  if (!bundle.length() || !presetName.length()) return false;
+static bool applyPreset(const String& bundle, const String& presetName, String* errorMessage, int* statusCode) {
+  if (errorMessage) errorMessage->clear();
+  if (statusCode) *statusCode = 500;
+  if (!bundle.length() || !presetName.length()) {
+    if (errorMessage) *errorMessage = "Preset name required";
+    if (statusCode) *statusCode = 400;
+    return false;
+  }
   String path = presetPath(bundle, presetName);
   File f = LittleFS.open(path, FILE_READ);
-  if (!f) return false;
+  if (!f) {
+    if (errorMessage) *errorMessage = "Preset not found";
+    if (statusCode) *statusCode = 404;
+    return false;
+  }
   DynamicJsonDocument doc(2048);
   auto err = deserializeJson(doc, f);
   f.close();
-  if (err != DeserializationError::Ok) return false;
+  if (err != DeserializationError::Ok) {
+    if (errorMessage) *errorMessage = "Preset parse failed";
+    if (statusCode) *statusCode = 422;
+    return false;
+  }
   JsonObject obj = doc.as<JsonObject>();
   bool changed = false;
+  bool hwFailed = false;
+  String hwMessage;
   for (JsonPair kv : obj) {
     const char* id = kv.key().c_str();
     float val = kv.value().as<float>();
@@ -1379,11 +1456,20 @@ static bool applyPreset(const String& bundle, const String& presetName) {
     float existing = getDspValue(spec->id);
     if (std::isnan(existing) || fabsf(existing - clamped) > 0.0001f) {
       setDspValueInternal(spec->id, clamped, false);
+      if (!applyDspValueToHardware(*spec, clamped) && !hwFailed) {
+        hwFailed = true;
+        hwMessage = adau_last_error.length() ? adau_last_error : "Failed to write DSP value";
+      }
       changed = true;
     }
   }
   if (changed) markDspValuesDirty();
-  return changed;
+  if (hwFailed) {
+    if (errorMessage) *errorMessage = hwMessage;
+    if (statusCode) *statusCode = 502;
+    return false;
+  }
+  return true;
 }
 
 static bool deletePreset(const String& bundle, const String& presetName) {
@@ -1487,8 +1573,23 @@ static bool renameBundle(const String& oldName, const String& newName) {
 static bool pushBundleToDsp(const String& name) {
   if (!name.length()) return false;
   String program = String(DSP_DIR) + "/" + name + "/program.bin";
-  if (!LittleFS.exists(program)) return false;
-  addLog(String("push dsp bundle requested: ") + name + " (self-boot stub)");
+  if (!LittleFS.exists(program)) {
+    adauSetError("program.bin missing");
+    return false;
+  }
+  if (!adau_ready) {
+    adauSetError("ADAU link offline");
+    return false;
+  }
+  if (!adauWriteProgramToEeprom(program)) {
+    return false;
+  }
+  if (!adauTriggerSelfboot()) {
+    return false;
+  }
+  loadDspBundle(name, true);
+  applyAllDspValuesToHardware();
+  addLog(String("bundle pushed & selfbooted: ") + name);
   return true;
 }
 
@@ -1505,7 +1606,13 @@ static bool handleDspControlUpdate(JsonObject data) {
   float current = getDspValue(spec->id);
   if (!std::isfinite(current) || fabsf(current - clamped) > 0.0001f) {
     setDspValueInternal(spec->id, clamped, true);
-    addLog(String("dsp control ") + spec->id + " -> " + String(clamped, 3));
+    if (!applyDspValueToHardware(*spec, clamped)) {
+      if (spec->address != 0) {
+        addLog(String("dsp control hw write failed for ") + spec->id);
+      }
+    } else {
+      addLog(String("dsp control ") + spec->id + " -> " + String(clamped, 3));
+    }
     return true;
   }
   return false;
@@ -1520,6 +1627,192 @@ static AsyncJsonResponse* createThermStatusResponse(bool ok, const String& messa
   populateThermStatus(root);
   resp->setLength();
   return resp;
+}
+
+static void adauSetError(const String& msg) {
+  adau_last_error = msg;
+  addLog(String("adau: ") + msg);
+}
+
+static bool adauInit() {
+  if (!Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL)) {
+    adauSetError("I2C begin failed");
+    return false;
+  }
+  Wire.setClock(I2C_FREQUENCY_HZ);
+  if (PIN_ADAU_RESET >= 0) {
+    pinMode(PIN_ADAU_RESET, OUTPUT);
+    bool inactive = ADAU_RESET_ACTIVE_LOW ? HIGH : LOW;
+    digitalWrite(PIN_ADAU_RESET, inactive);
+    delay(10);
+  }
+  adau_ready = true;
+  adau_last_error = "";
+  addLog("adau link ready");
+  return true;
+}
+
+static void adauResetPulse() {
+  if (PIN_ADAU_RESET < 0) return;
+  bool active = ADAU_RESET_ACTIVE_LOW ? LOW : HIGH;
+  bool inactive = ADAU_RESET_ACTIVE_LOW ? HIGH : LOW;
+  digitalWrite(PIN_ADAU_RESET, active);
+  delay(5);
+  digitalWrite(PIN_ADAU_RESET, inactive);
+  delay(10);
+}
+
+static bool adauTriggerSelfboot() {
+  if (PIN_ADAU_RESET < 0) {
+    adauSetError("reset pin not defined; power-cycle ADAU to selfboot");
+    return false;
+  }
+  adauResetPulse();
+  addLog("adau selfboot triggered");
+  return true;
+}
+
+static bool adauWriteEepromPage(uint16_t addr, const uint8_t* data, size_t len) {
+  Wire.beginTransmission(ADAU_EEPROM_I2C_ADDR);
+  Wire.write(static_cast<uint8_t>((addr >> 8) & 0xFF));
+  Wire.write(static_cast<uint8_t>(addr & 0xFF));
+  Wire.write(data, len);
+  uint8_t res = Wire.endTransmission();
+  if (res != 0) {
+    adauSetError(String("EEPROM write err ") + res);
+    return false;
+  }
+  delay(5); // tWR
+  return true;
+}
+
+static bool adauWriteProgramToEeprom(const String& path) {
+  File f = LittleFS.open(path, FILE_READ);
+  if (!f) {
+    adauSetError("program file missing");
+    return false;
+  }
+  uint32_t addr = 0;
+  uint8_t buf[ADAU_EEPROM_PAGE_BYTES];
+  while (f.available()) {
+    size_t chunk = f.read(buf, sizeof(buf));
+    if (addr + chunk > ADAU_EEPROM_SIZE_BYTES) {
+      f.close();
+      adauSetError("program too large for EEPROM");
+      return false;
+    }
+    size_t offset = 0;
+    while (offset < chunk) {
+      size_t pageRemaining = ADAU_EEPROM_PAGE_BYTES - ((addr + offset) % ADAU_EEPROM_PAGE_BYTES);
+      size_t toWrite = std::min(pageRemaining, chunk - offset);
+      if (!adauWriteEepromPage(static_cast<uint16_t>(addr + offset), buf + offset, toWrite)) {
+        f.close();
+        return false;
+      }
+      offset += toWrite;
+    }
+    addr += chunk;
+  }
+  f.close();
+  addLog(String("wrote ") + addr + " bytes to ADAU EEPROM");
+  return true;
+}
+
+static bool adauWriteRegister(uint16_t paramAddr, const uint8_t* data, size_t len) {
+  if (!adau_ready) return false;
+  Wire.beginTransmission(ADAU_I2C_ADDR);
+  Wire.write(static_cast<uint8_t>((paramAddr >> 8) & 0xFF));
+  Wire.write(static_cast<uint8_t>(paramAddr & 0xFF));
+  Wire.write(data, len);
+  uint8_t res = Wire.endTransmission();
+  if (res != 0) {
+    adauSetError(String("I2C write err ") + res);
+    return false;
+  }
+  return true;
+}
+
+static uint32_t floatToFixed523(float value) {
+  float scaled = value * (1 << 23);
+  if (scaled > 0x07FFFFFF) scaled = 0x07FFFFFF;
+  if (scaled < -0x08000000) scaled = -0x08000000;
+  return static_cast<uint32_t>(static_cast<int32_t>(roundf(scaled)));
+}
+
+static bool applyDspValueToHardware(const DspControlSpec& spec, float value) {
+  if (spec.address == 0) return true; // UI-only control
+  if (!adau_ready) {
+    adauSetError("ADAU link offline");
+    return false;
+  }
+  uint8_t payload[4] = {0};
+  size_t bytes = spec.bytes ? spec.bytes : 4;
+  switch (spec.format) {
+    case DspValueFormat::Unsigned8: {
+      uint8_t v = static_cast<uint8_t>(clampf(value, spec.min_v, spec.max_v));
+      payload[0] = v;
+      bytes = 1;
+      break;
+    }
+    case DspValueFormat::Unsigned16: {
+      uint16_t v = static_cast<uint16_t>(clampf(value, spec.min_v, spec.max_v));
+      payload[0] = (v >> 8) & 0xFF;
+      payload[1] = v & 0xFF;
+      bytes = 2;
+      break;
+    }
+    case DspValueFormat::Unsigned24: {
+      uint32_t v = static_cast<uint32_t>(clampf(value, spec.min_v, spec.max_v));
+      payload[0] = (v >> 16) & 0xFF;
+      payload[1] = (v >> 8) & 0xFF;
+      payload[2] = v & 0xFF;
+      bytes = 3;
+      break;
+    }
+    case DspValueFormat::Unsigned32: {
+      uint32_t v = static_cast<uint32_t>(clampf(value, spec.min_v, spec.max_v));
+      payload[0] = (v >> 24) & 0xFF;
+      payload[1] = (v >> 16) & 0xFF;
+      payload[2] = (v >> 8) & 0xFF;
+      payload[3] = v & 0xFF;
+      bytes = 4;
+      break;
+    }
+    case DspValueFormat::Raw: {
+      uint32_t v = static_cast<uint32_t>(value);
+      payload[0] = (v >> 24) & 0xFF;
+      payload[1] = (v >> 16) & 0xFF;
+      payload[2] = (v >> 8) & 0xFF;
+      payload[3] = v & 0xFF;
+      bytes = std::min<size_t>(bytes, 4);
+      break;
+    }
+    case DspValueFormat::Fixed523:
+    default: {
+      uint32_t fixed = floatToFixed523(value);
+      payload[0] = (fixed >> 24) & 0xFF;
+      payload[1] = (fixed >> 16) & 0xFF;
+      payload[2] = (fixed >> 8) & 0xFF;
+      payload[3] = fixed & 0xFF;
+      bytes = 4;
+      break;
+    }
+  }
+  bool ok = adauWriteRegister(static_cast<uint16_t>(spec.address & 0xFFFF), payload, bytes);
+  if (!ok) {
+    addLog(String("dsp hw write failed @0x") + String(spec.address, 16));
+  }
+  return ok;
+}
+
+static void applyAllDspValuesToHardware() {
+  if (!adau_ready) return;
+  for (const auto& spec : dsp_controls) {
+    float value = getDspValue(spec.id);
+    if (std::isfinite(value)) {
+      applyDspValueToHardware(spec, value);
+    }
+  }
 }
 
 
@@ -1600,6 +1893,7 @@ void setup() {
 
   settingsLoad(prefs, settings);
   refreshThermistorParams();
+  adauInit();
   if (littlefs_ready) {
     dspInit();
   } else {

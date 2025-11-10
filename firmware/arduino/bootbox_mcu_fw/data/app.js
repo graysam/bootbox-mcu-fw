@@ -63,6 +63,7 @@ const S = {
   thermSession: $('therm-session'),
   thermTableBody: $('therm-table-body'),
   dspControls: $('dsp-controls'),
+  dspHwStatus: $('dsp-hw-status'),
   dspActiveBundle: $('dsp-active-bundle'),
   dspStatus: $('dsp-status'),
   dspBundleList: $('dsp-bundle-list'),
@@ -95,14 +96,59 @@ const S = {
     }
   };
   let thermBusy = false;
+  const DSP_CONTROL_TYPES = new Set(['slider', 'knob', 'fader', 'toggle']);
   const dspControlElements = new Map();
   const dspView = {
     schema: [],
     values: {},
     bundles: [],
     presets: [],
-    activeBundle: ''
+    activeBundle: '',
+    hwReady: false,
+    hwError: ''
   };
+
+  function sanitizeControlSpec(raw = {}) {
+    if (!raw || typeof raw !== 'object') return null;
+    const id = typeof raw.id === 'string' ? raw.id : '';
+    if (!id) return null;
+    const typeRaw = typeof raw.type === 'string' ? raw.type.toLowerCase() : 'slider';
+    const type = DSP_CONTROL_TYPES.has(typeRaw) ? typeRaw : 'slider';
+    let min = Number(raw.min);
+    if (!Number.isFinite(min)) {
+      min = type === 'toggle' ? 0 : 0;
+    }
+    let max = Number(raw.max);
+    if (!Number.isFinite(max)) {
+      max = type === 'toggle' ? 1 : min + 1;
+    }
+    if (max <= min) {
+      max = min + (type === 'toggle' ? 1 : 1);
+    }
+    const defaultStep = type === 'toggle' ? 1 : 0.1;
+    let step = Number(raw.step);
+    if (!Number.isFinite(step) || step <= 0) {
+      step = defaultStep;
+    }
+    const decimals = Number.isFinite(raw.decimals) ? Number(raw.decimals) : undefined;
+    const defaultValue = Number.isFinite(raw.default) ? Number(raw.default) : NaN;
+    return {
+      id,
+      label: typeof raw.label === 'string' && raw.label.length ? raw.label : id,
+      type,
+      unit: typeof raw.unit === 'string' ? raw.unit : '',
+      min,
+      max,
+      step,
+      decimals,
+      defaultValue
+    };
+  }
+
+  function clampValue(value, min, max) {
+    if (!Number.isFinite(value)) return min;
+    return Math.min(Math.max(value, min), max);
+  }
 
   const thermalFields = {
     sp1: {
@@ -656,6 +702,14 @@ const S = {
       dspView.values = { ...dspView.values, ...dsp.values };
       updateDspControlValues();
     }
+    if (typeof dsp.hw_ready === 'boolean') {
+      dspView.hwReady = !!dsp.hw_ready;
+    }
+    dspView.hwError = typeof dsp.hw_error === 'string' ? dsp.hw_error : '';
+    if (typeof dsp.schema_ready === 'boolean') {
+      updateSchemaBadge(dsp.schema_ready);
+    }
+    updateDspHardwareStatus();
     updateSystemInfo(sys);
   }
 
@@ -669,9 +723,17 @@ const S = {
 
   async function apiFetch(url, options = {}) {
     const res = await fetch(url, options);
-    const data = await res.json();
-    if (!res.ok || data?.ok === false) {
-      const message = (data && data.message) || res.statusText || 'Request failed';
+    const text = await res.text();
+    let data = {};
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = {};
+      }
+    }
+    if (!res.ok || (Object.prototype.hasOwnProperty.call(data, 'ok') && data.ok === false)) {
+      const message = data.message || res.statusText || 'Request failed';
       throw new Error(message);
     }
     return data;
@@ -682,6 +744,29 @@ const S = {
     S.dspStatus.textContent = message;
     S.dspStatus.classList.remove('success', 'error', 'pending');
     if (variant) S.dspStatus.classList.add(variant);
+  }
+
+  function updateDspHardwareStatus() {
+    if (!S.dspHwStatus) return;
+    const el = S.dspHwStatus;
+    el.classList.remove('success', 'error', 'pending');
+    if (dspView.hwError) {
+      el.textContent = `DSP error: ${dspView.hwError}`;
+      el.classList.add('error');
+      return;
+    }
+    if (!dspView.schema.length) {
+      el.textContent = 'Waiting for interface upload';
+      el.classList.add('pending');
+      return;
+    }
+    if (dspView.hwReady) {
+      el.textContent = 'DSP link ready';
+      el.classList.add('success');
+      return;
+    }
+    el.textContent = 'DSP link offline';
+    el.classList.add('pending');
   }
 
   async function refreshDspBundles() {
@@ -700,19 +785,25 @@ const S = {
     if (!S.dspControls) return;
     try {
       const data = await apiFetch('/api/dsp/schema');
-      dspView.schema = data.controls || [];
-      dspView.values = data.values || {};
+      const controls = Array.isArray(data.controls) ? data.controls : [];
+      dspView.schema = controls.map((spec) => sanitizeControlSpec(spec)).filter(Boolean);
+      dspView.values = { ...(data.values || {}) };
       if (data.active) dspView.activeBundle = data.active;
-      dspView.presets = data.presets || [];
+      dspView.presets = Array.isArray(data.presets) ? data.presets : [];
+      if (typeof data.hw_ready === 'boolean') {
+        dspView.hwReady = !!data.hw_ready;
+      }
+      dspView.hwError = typeof data.hw_error === 'string' ? data.hw_error : '';
+      const schemaReady = typeof data.schema_ready === 'boolean' ? data.schema_ready : dspView.schema.length > 0;
       renderDspControls();
       renderPresetList();
       updateBundleBadge();
-      updateSchemaBadge(true);
+      updateSchemaBadge(schemaReady);
+      updateDspHardwareStatus();
     } catch (err) {
-      dspView.schema = [];
-      dspView.values = {};
       updateSchemaBadge(false);
       setDspStatus(err.message || 'Failed to load schema', 'error');
+      updateDspHardwareStatus();
     }
   }
 
@@ -782,11 +873,14 @@ const S = {
 
   async function triggerPush(name) {
     try {
+      setDspStatus(`Pushing ${name} to DSP...`, 'pending');
       await dspAction('push_bundle', { name });
       showToast(`Pushed ${name} (self-boot)`, 'info', 2000);
+      setDspStatus(`Bundle ${name} pushed`, 'success');
     } catch (err) {
       setDspStatus(err.message, 'error');
     }
+    await refreshDspSchema();
   }
 
   async function renameBundle(oldName) {
@@ -821,6 +915,7 @@ const S = {
       return;
     }
     dspView.schema.forEach((spec) => {
+      if (!spec || !spec.id) return;
       const card = document.createElement('div');
       card.className = 'dsp-control-card';
       const label = document.createElement('div');
@@ -831,18 +926,29 @@ const S = {
       valueLabel.className = 'value-sm';
       valueLabel.textContent = '—';
       let input;
+      const min = Number.isFinite(spec.min) ? spec.min : 0;
+      const max = Number.isFinite(spec.max) ? spec.max : min + 1;
+      const defaultValue = Number.isFinite(spec.defaultValue) ? spec.defaultValue : min;
       if (spec.type === 'toggle') {
         input = document.createElement('input');
         input.type = 'checkbox';
+        const midpoint = (min + max) / 2;
+        input.checked = defaultValue >= midpoint;
+        valueLabel.textContent = formatDspValue(spec, input.checked ? max : min);
         input.addEventListener('change', () => {
-          sendDspValue(spec.id, input.checked ? spec.max : spec.min);
+          const nextValue = input.checked ? max : min;
+          sendDspValue(spec.id, nextValue);
+          valueLabel.textContent = formatDspValue(spec, nextValue);
         });
       } else {
         input = document.createElement('input');
         input.type = 'range';
-        input.min = spec.min ?? 0;
-        input.max = spec.max ?? 1;
-        input.step = spec.step ?? 0.1;
+        input.min = min;
+        input.max = max;
+        input.step = Number.isFinite(spec.step) && spec.step > 0 ? spec.step : 0.1;
+        const startValue = clampValue(defaultValue, min, max);
+        input.value = startValue;
+        valueLabel.textContent = formatDspValue(spec, startValue);
         input.addEventListener('input', () => {
           valueLabel.textContent = formatDspValue(spec, Number(input.value));
         });
@@ -859,19 +965,30 @@ const S = {
   }
 
   function formatDspValue(spec, value) {
-    const decimals = spec.decimals ?? (spec.step && spec.step < 1 ? 2 : 0);
+    if (!Number.isFinite(value)) return '—';
+    if (spec.type === 'toggle') {
+      return value >= ((spec.min + spec.max) / 2) ? 'On' : 'Off';
+    }
+    const decimals = Number.isFinite(spec.decimals)
+      ? spec.decimals
+      : (spec.step && spec.step < 1 ? 2 : 0);
     const val = Number(value).toFixed(decimals);
     return spec.unit ? `${val} ${spec.unit}` : val;
   }
 
   function updateDspControlValues() {
     dspControlElements.forEach((entry, id) => {
+      if (!entry || !entry.spec || !entry.input) return;
       const value = Number(dspView.values[id]);
-      if (!Number.isFinite(value)) return;
+      if (!Number.isFinite(value)) {
+        if (entry.valueLabel) entry.valueLabel.textContent = '—';
+        return;
+      }
       if (entry.input.type === 'checkbox') {
-        entry.input.checked = value > ((entry.spec.min ?? 0) + (entry.spec.max ?? 1)) / 2;
+        const midpoint = (entry.spec.min + entry.spec.max) / 2;
+        entry.input.checked = value >= midpoint;
       } else {
-        entry.input.value = value;
+        entry.input.value = clampValue(value, entry.spec.min, entry.spec.max);
       }
       if (entry.valueLabel) {
         entry.valueLabel.textContent = formatDspValue(entry.spec, value);
@@ -884,7 +1001,12 @@ const S = {
       showToast('Controller offline – unable to update DSP', 'warn', 2000);
       return;
     }
-    send('set_dsp', { id, value });
+    let nextValue = value;
+    const entry = dspControlElements.get(id);
+    if (entry && entry.spec && entry.input?.type !== 'checkbox') {
+      nextValue = clampValue(Number(value), entry.spec.min, entry.spec.max);
+    }
+    send('set_dsp', { id, value: nextValue });
   }
 
   function renderPresetList() {

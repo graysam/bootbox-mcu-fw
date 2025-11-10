@@ -336,3 +336,60 @@ Prompt: okay, lets build out the DSP management feature set...
   - Documented the DSP bundle workflow, new endpoints, and interface XML format alongside the updated feature list.
 - docs/wiki/DSP-Control.md & docs/wiki/Web-UI.md
   - Updated wiki stubs to describe the bundle/schema/preset system and the UI flows.
+Prompt: lets get that going, im keen to get the two boards integrated
+- firmware/arduino/bootbox_mcu_fw/config.h
+  - Added ADAU/I²C configuration knobs (SDA/SCL pins, I²C clock, codec + EEPROM addresses, optional reset pin) so the transport can be tailored to each harness.
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
+  - Integrated Wire/I²C, added an ADAU manager (EEPROM writer, reset pulser, 5.23 conversion, parameter register writes) and tied it into DSP bundle pushes and live control updates.
+  - Bundles now push `program.bin` into the ADAU EEPROM and pulse reset to keep the self-boot workflow; dynamic controls stream to hardware via the XML-mapped addresses/formats.
+  - Exposed hardware status/error info via `/api/dsp/schema`, applied DSP values on preset load/startup, and refreshed system telemetry accordingly.
+- firmware/arduino/bootbox_mcu_fw/data/index.html
+  - Rebuilt the DSP tab UI into a bundle/preset manager with status line and dynamic control grid matching the uploaded schema.
+- firmware/arduino/bootbox_mcu_fw/data/app.js
+  - Added REST helpers, bundle/preset management, dynamic control rendering, status messaging, and direct WebSocket updates for the new DSP endpoints; removed the fixed mixer widgets.
+- README.md / docs/wiki/DSP-Control.md / docs/wiki/Web-UI.md
+  - Documented the ADAU transport, updated the bundle/preset workflow, interface schema semantics, and UI behavior. Synced the GitHub wiki with the new content.
+- Build
+  - `./tools/arduino-build.sh --config-file arduino-cli.yaml`
+Prompt: is the communication layer to/from the ADAU set up yet? lets get that going, im keen to get the two boards integrated
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
+  - Added ADAU hardware status fields to `/api/dsp/schema`, improved `push_bundle`/preset responses, and surfaced controller errors back to the client.
+  - Reworked `applyPreset` to return descriptive HTTP errors, keep local values in sync, and only fail when I²C writes actually break.
+  - Treated UI-only controls (`address == 0`) as successes and emit "ADAU link offline" when the transport is down so callers see a concrete reason.
+- firmware/arduino/bootbox_mcu_fw/data/app.js
+  - Sanitized control specs client-side, added clamping helpers, and prevented malformed schema data from breaking slider/toggle rendering.
+  - Introduced a DSP hardware status line that consumes `hw_ready`/`hw_error`, refreshes after pushes/schema loads, and mirrors log errors inline.
+  - Improved control initialization/value updates (default positions, toggle labels, clamped WebSocket writes) and ensured post-push refreshes pull the latest schema.
+- firmware/arduino/bootbox_mcu_fw/data/index.html
+  - Added the DSP hardware status placeholder beneath the controls card for the new UI indicator.
+- README.md
+  - Documented the `hw_ready`/`hw_error` telemetry and clarified the `/api/dsp/schema` response fields.
+- docs/wiki/DSP-Control.md
+  - Noted that the schema endpoint now surfaces `schema_ready`/`hw_ready`/`hw_error` for automation and UI consumers.
+- docs/wiki/Web-UI.md
+  - Updated the DSP tab description to call out the new status line and detailed ADAU error messaging.
+- Build & verification
+  - Ran `./tools/arduino-build.sh --config-file arduino-cli.yaml` to regenerate the firmware + LittleFS/SPIFS/unified artifacts with the updated DSP flow.
+Prompt: please now put some good effort into detailed documentation on the wiki including how-to articles where relevant, and information on the bundle schema and generating them. include examples. if you realise in the process that any changes ought to be made to the firmware for function, stability or clarity, please do so.
+- docs/wiki/Home.md
+  - Added navigation overview, split reference vs how-to sections, and linked in the new DSP bundle guide.
+- docs/wiki/DSP-Bundle-How-To.md
+  - Created a full how-to covering SigmaStudio export, interface authoring, upload (UI + curl), push/preset workflow, and troubleshooting tips.
+- docs/wiki/Build-and-Flash.md
+  - Expanded toolchain description, detailed artifact outputs, flashing alternatives, and post-flash verification checklist.
+- docs/wiki/Firmware.md
+  - Documented runtime architecture, ADAU manager behavior, persistence layout, and major modules.
+- docs/wiki/Hardware.md
+  - Added platform targets, wiring tables, ADAU notes, and EMI/cabling recommendations.
+- docs/wiki/Web-UI.md
+  - Described tab behaviors, WS/dirty-state flow, accessibility notes, and best practices per tab.
+- docs/wiki/DSP-Control.md
+  - Extended schema reference with attribute tables, REST API summary, preset format, and automation guidance.
+- docs/wiki/Thermistor-Calibration.md
+  - Rewrote workflow with detailed UI steps, API payload examples, and practical tips.
+- docs/wiki/Release-Process.md
+  - Added pre-flight checks, packaging commands, tagging instructions, and post-release tasks.
+- docs/wiki/Troubleshooting.md
+  - Converted to a table-driven cheat sheet with additional DSP/network tips and serial debugging guidance.
+- README.md
+  - Linked to the expanded wiki, highlighting where to find bundle, build, and calibration guides.
