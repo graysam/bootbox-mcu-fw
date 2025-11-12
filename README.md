@@ -30,8 +30,12 @@ Firmware for a Wi-Fi MCU system controller for a DIY car stereo using an ADAU170
   - `/api/dsp/schema` (GET): fields include `active`, `schema_ready`, `hw_ready`, optional `hw_error`, sanitized `controls[]`, `values{}`, and `presets[]`.
   - `/api/dsp/action` (POST): JSON `{"action": ...}` for bundle select/delete/rename/push and preset save/load/delete.
   - `/api/upload/adau` (POST form): upload program/interface files (`bundle` + `kind=program|interface` query params).
-  - `/api/logs` (GET): device log ring buffer.
-  - `/api/therm/calibration` (GET/POST): manage calibration workflow (start, capture, solve, clear).
+- `/api/logs` (GET): device log ring buffer.
+- `/api/therm/calibration` (GET/POST): manage calibration workflow (start, capture, solve, clear).
+
+## Companion Tools
+- **BB-Builder** (`BB-Builder/`): cross-platform Qt desktop app (in progress) for importing SigmaStudio projects, arranging UI layouts, and exporting `.bbx` bundles (program + interface) for upload via the ESP32 web UI.
+  - Current build parses `.params` + `.xml` exports, surfaces module/control metadata, identifies the matching program binary, and lets you assemble layout presets with a drag-and-drop UI that mirrors the MCU dashboard styling.
 
 ## Documentation
 - The `docs/wiki/` folder mirrors the GitHub wiki. Key entries:

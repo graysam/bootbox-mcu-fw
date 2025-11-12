@@ -393,3 +393,38 @@ Prompt: please now put some good effort into detailed documentation on the wiki 
   - Converted to a table-driven cheat sheet with additional DSP/network tips and serial debugging guidance.
 - README.md
   - Linked to the expanded wiki, highlighting where to find bundle, build, and calibration guides.
+Prompt: lets now create a helper app ...
+- BB-Builder/CMakeLists.txt
+  - Added Qt 6 / C++17 project scaffold with automatic MOC/UIC/RCC, executable target, and install step.
+- BB-Builder/src/main.cpp & src/ui/MainWindow.*
+  - Created Qt Widgets entry point and placeholder main window with File menu actions for project/create/import/export along with stub tabs.
+- BB-Builder/include/BBBuilder/*.h & src/core/*.cpp
+  - Introduced initial data model (Project/modules/controls), SigmaStudio parser stub, and bundle writer skeleton ready for future archive logic.
+- BB-Builder/README.md
+  - Documented goals, build instructions, and current status of the desktop companion app.
+- etc/.gitkeep
+  - Added placeholder so sample SigmaStudio exports can live under `./etc/` without being ignored.
+- README.md
+  - Linked to the new BB-Builder companion app under a “Companion Tools” section.
+- System environment
+  - Installed Qt 6 + build dependencies via `sudo dnf install` (cmake, ninja, gcc/g++, qt6-* dev packages) to enable BB-Builder compilation on this Fedora host.
+  - Configured and built the initial BB-Builder target with CMake/Ninja to verify the toolchain works end-to-end.
+- BB-Builder/src & include
+  - Implemented first-pass SigmaStudio `.params` parser that groups parameters by cell name, derives control metadata, and reports summaries for the UI.
+  - Added a (placeholder) module/catalog scaffold for future control templates.
+  - Updated the Qt UI to list parsed modules/controls, show parsing results, and lay out the Import/Layout/Preview tabs with proper widgets.
+  - Fixed bundle writer API defaults and ensured the project builds cleanly with the new Qt toolchain.
+- BB-Builder/README.md
+  - Documented the new parser behavior and how to point the app at sample exports stored under `etc/`.
+- BB-Builder parser enhancements
+  - Extended `SigmaParser` to consume SigmaStudio `.xml` schematics alongside `.params`, enriching modules with descriptions, control address/size/type data, and heuristics for gain/frequency/delay/toggle widgets.
+  - Auto-detects the matching DSP program binary (`.bin/.dat/.hex`) and surfaces it in the project + preview text so bundle generation can reuse the firmware-ready image.
+  - Wired the import workflow to update project metadata/status and link against Qt’s XML module (CMake now pulls `Qt6::Xml`).
+- BB-Builder UI/layout work
+  - Replaced the old placeholder tabs with a dark-themed Import/Layout/Preview experience, including drag-and-drop layout ordering, add/remove buttons, and live preview cards that mirror the MCU dashboard styling.
+  - Hooked import results into the layout workflow (double-click or select ➝ add), surfaced program binary names in the status bar, and added summary text to the preview pane.
+- Parser + schema planning
+  - Extended `SigmaParser` to read SigmaStudio schematic XMLs alongside `.params`, capturing module descriptions, control sizes/types, and default values with heuristics for gain/frequency/delay/toggle widgets.
+  - Documented a shared DSP catalog strategy (`docs/wiki/DSP-Schema-Sync.md`) to keep desktop and firmware control definitions synchronized.
+- Docs
+  - Updated `README.md` and `BB-Builder/README.md` to describe the new layout workflow and parsing capabilities.
