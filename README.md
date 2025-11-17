@@ -34,8 +34,8 @@ Firmware for a Wi-Fi MCU system controller for a DIY car stereo using an ADAU170
 - `/api/therm/calibration` (GET/POST): manage calibration workflow (start, capture, solve, clear).
 
 ## Companion Tools
-- **BB-Builder** (`BB-Builder/`): cross-platform Qt desktop app (in progress) for importing SigmaStudio projects, arranging UI layouts, and exporting `.bbx` bundles (program + interface) for upload via the ESP32 web UI.
-  - Current build parses `.params` + `.xml` exports, surfaces module/control metadata, identifies the matching program binary, and lets you assemble layout presets with a drag-and-drop UI that mirrors the MCU dashboard styling.
+- **BB-Builder** (`BB-Builder/`): cross-platform Qt desktop app for importing SigmaStudio exports, arranging UI layouts, and exporting `.bbx` bundles (a tar archive containing `program.bin` + auto-generated `interface.xml`) ready for upload via the MCU web UI.
+  - Current build parses SigmaStudio parameter headers, `.params`, and NetList XML to surface human-friendly algorithm + parameter names; the import view now shows “Algorithm Blocks” and “Assignable Params” lists with those labels so it’s easy to pick the right DSP block before adding it to the layout, and the QtWebEngine preview mirrors exactly what the MCU UI will render.
 
 ## Documentation
 - The `docs/wiki/` folder mirrors the GitHub wiki. Key entries:

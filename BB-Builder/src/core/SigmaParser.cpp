@@ -1,13 +1,16 @@
 #include <BBBuilder/SigmaParser.h>
 
 #include <QDir>
+#include <QDomDocument>
 #include <QFile>
 #include <QFileInfo>
 #include <QMap>
+#include <QPair>
 #include <QRegularExpression>
+#include <QSet>
 #include <QStringConverter>
+#include <QStringList>
 #include <QTextStream>
-#include <QDomDocument>
 
 namespace BBB {
 
@@ -33,31 +36,23 @@ struct ParamBlock {
     QString paramName;
     quint32 address = 0;
     double value = 0.0;
+    QString type;
+    QString symbol;
+    QString fullName;
+    int algIndex = 0;
 };
 
 void applyHeuristics(ControlDescriptor &control);
-
-bool finishBlock(const ParamBlock &block, QMap<QString, ModuleDescriptor> &modules) {
-    if (block.cellName.isEmpty() || block.paramName.isEmpty()) {
-        return false;
-    }
-    auto &module = modules[block.cellName];
-    if (module.name.isEmpty()) {
-        module.name = block.cellName.trimmed();
-    }
-    ControlDescriptor control;
-    control.id = QStringLiteral("%1_%2").arg(block.cellName.trimmed(), block.paramName.trimmed()).replace(' ', '_');
-    control.label = block.paramName.trimmed();
-    control.type = QStringLiteral("slider");
-    control.min = -60.0;
-    control.max = 12.0;
-    control.step = 0.1;
-    control.defaultValue = block.value;
-    control.address = block.address;
-    control.format = QStringLiteral("fixed5.23");
-    applyHeuristics(control);
-    module.controls.push_back(control);
-    return true;
+QString canonicalKey(const QString &value) {
+    QString normalized = value.trimmed().toLower();
+    return normalized;
+}
+QString normalizeModuleName(const QString &input) {
+    QString out = input;
+    out.replace(' ', '_');
+    out.replace('-', '_');
+    out.replace('/', '_');
+    return out.toUpper();
 }
 
 void applyHeuristics(ControlDescriptor &control) {
@@ -88,7 +83,7 @@ void applyHeuristics(ControlDescriptor &control) {
     }
 }
 
-bool integrateXmlMeta(const QString &xmlFile, QMap<QString, ModuleDescriptor> &modules) {
+bool integrateXmlMeta(const QString &xmlFile, QMap<QString, ModuleDescriptor> &modules, QStringList &order, QVector<AlgorithmDescriptor> &algorithms) {
     if (xmlFile.isEmpty()) return false;
     QFile file(xmlFile);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return false;
@@ -102,46 +97,27 @@ bool integrateXmlMeta(const QString &xmlFile, QMap<QString, ModuleDescriptor> &m
     QDomDocument doc;
     if (!doc.setContent(&file)) return false;
 #endif
-    auto moduleNodes = doc.elementsByTagName(QStringLiteral("Module"));
+    auto moduleNodes = doc.elementsByTagName(QStringLiteral("Algorithm"));
+    QMap<QString, int> instanceCounters;
     for (int i = 0; i < moduleNodes.count(); ++i) {
         auto moduleElement = moduleNodes.at(i).toElement();
-        const QString cellName = moduleElement.firstChildElement(QStringLiteral("CellName")).text().trimmed();
+        const QString cellName = moduleElement.attribute(QStringLiteral("cell")).trimmed();
         if (cellName.isEmpty()) continue;
-        auto &module = modules[cellName];
-        if (module.name.isEmpty()) module.name = cellName;
-        module.description = moduleElement.firstChildElement(QStringLiteral("Description")).text().trimmed();
-        auto algoElements = moduleElement.elementsByTagName(QStringLiteral("Algorithm"));
-        QString description;
-        for (int j = 0; j < algoElements.count(); ++j) {
-            auto algoEl = algoElements.at(j).toElement();
-            if (description.isEmpty()) {
-                description = algoEl.firstChildElement(QStringLiteral("Description")).text();
-            }
-            auto params = algoEl.elementsByTagName(QStringLiteral("ModuleParameter"));
-            for (int k = 0; k < params.count(); ++k) {
-                auto param = params.at(k).toElement();
-                const QString paramName = param.firstChildElement(QStringLiteral("Name")).text().trimmed();
-                const QString addrStr = param.firstChildElement(QStringLiteral("Address")).text().trimmed();
-                bool ok = false;
-                const quint32 addr = addrStr.toUInt(&ok);
-                for (auto &ctrl : module.controls) {
-                    if (ctrl.label == paramName && ok) {
-                        ctrl.address = addr;
-                        ctrl.defaultValue = param.firstChildElement(QStringLiteral("Value")).text().toDouble();
-                        ctrl.byteWidth = static_cast<quint8>(param.firstChildElement(QStringLiteral("Size")).text().toUInt());
-                        const QString type = param.firstChildElement(QStringLiteral("Type")).text().trimmed();
-                        if (type.contains(QStringLiteral("Fixed"), Qt::CaseInsensitive)) {
-                            ctrl.format = QStringLiteral("fixed5.23");
-                        } else if (type.contains(QStringLiteral("Int"), Qt::CaseInsensitive)) {
-                            ctrl.format = QStringLiteral("u32");
-                        } else {
-                            ctrl.format = QStringLiteral("raw");
-                        }
-                        applyHeuristics(ctrl);
-                    }
-                }
-            }
+        const QString key = canonicalKey(cellName);
+        if (!modules.contains(key)) {
+            ModuleDescriptor desc;
+            desc.name = cellName;
+            modules.insert(key, desc);
         }
+        if (!order.contains(key)) order.append(key);
+
+        AlgorithmDescriptor alg;
+        alg.cellName = cellName;
+        alg.moduleName = cellName;
+        alg.friendlyName = moduleElement.attribute(QStringLiteral("friendlyname")).trimmed();
+        alg.symbol = moduleElement.attribute(QStringLiteral("name"));
+        alg.instanceIndex = instanceCounters[cellName]++;
+        algorithms.append(alg);
     }
     return true;
 }
@@ -173,12 +149,111 @@ std::optional<SigmaParser::Result> SigmaParser::parseFromPath(const QString &pat
 #endif
 
     QMap<QString, ModuleDescriptor> moduleMap;
-    ParamBlock current;
+    QStringList moduleOrder;
 
-    auto flush = [&](){
-        if (finishBlock(current, moduleMap)) {
-            current = ParamBlock{};
+    const QString headerFile = locateFile(info, {QStringLiteral("*_PARAM.h")});
+    if (headerFile.isEmpty()) {
+        return std::nullopt;
+    }
+
+    QFile header(headerFile);
+    if (!header.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return std::nullopt;
+    }
+    QTextStream headerStream(&header);
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+    headerStream.setCodec("UTF-8");
+#else
+    headerStream.setEncoding(QStringConverter::Utf8);
+#endif
+
+    QRegularExpression moduleStart(R"(\/\*\s*Module\s+(.+?)\s*-\s*(.+?)\s*\*\/)");
+    QRegularExpression moduleCount(R"(#define\s+MOD_(\w+)_COUNT\s+(\d+))");
+    QRegularExpression paramAddr(R"(#define\s+MOD_(\w+)_ALG(\d+)_([A-Za-z0-9_]+)_ADDR\s+(\d+))");
+    QRegularExpression paramValue(R"(#define\s+MOD_(\w+)_ALG(\d+)_([A-Za-z0-9_]+)_VALUE\s+.+\(([-0-9eE\.\+]+)\))");
+    QRegularExpression paramType(R"(#define\s+MOD_(\w+)_ALG(\d+)_([A-Za-z0-9_]+)_TYPE\s+([A-Z0-9_]+))");
+
+    QString currentCellName;
+    QString currentDescription;
+    QString currentMacro;
+    QMap<QString, QString> macroToCell;
+    QMap<QString, QPair<QString, int>> pendingRefs;
+
+    auto moduleKey = [&](const QString &cell) {
+        return canonicalKey(cell);
+    };
+
+    while (!headerStream.atEnd()) {
+        const QString line = headerStream.readLine();
+        QRegularExpressionMatch match;
+        if (line.contains(moduleStart, &match)) {
+            currentCellName = match.captured(1).trimmed();
+            currentDescription = match.captured(2).trimmed();
+        } else if (line.contains(moduleCount, &match)) {
+            currentMacro = match.captured(1);
+            macroToCell.insert(currentMacro, currentCellName);
+            const QString key = moduleKey(currentCellName);
+            auto &module = moduleMap[key];
+            if (module.name.isEmpty()) module.name = currentCellName;
+            module.description = currentDescription;
+            if (!moduleOrder.contains(key)) moduleOrder.append(key);
+        } else if (line.contains(paramAddr, &match)) {
+            const QString macro = match.captured(1);
+            const int alg = match.captured(2).toInt();
+            const QString symbol = match.captured(3);
+            const quint32 addr = match.captured(4).toUInt();
+            const QString cell = macroToCell.value(macro);
+            if (cell.isEmpty()) continue;
+            const QString key = moduleKey(cell);
+            auto &module = moduleMap[key];
+            ControlDescriptor control;
+            control.id = QStringLiteral("%1_alg%2_%3").arg(module.name).arg(alg).arg(symbol);
+            control.label = symbol;
+            control.algorithmIndex = alg;
+            control.address = addr;
+            control.format = QStringLiteral("fixed5.23");
+            applyHeuristics(control);
+            module.controls.push_back(control);
+            pendingRefs.insert(QStringLiteral("%1:%2:%3").arg(macro, QString::number(alg), symbol),
+                               qMakePair(key, module.controls.size() - 1));
+        } else if (line.contains(paramValue, &match)) {
+            const QString macro = match.captured(1);
+            const int alg = match.captured(2).toInt();
+            const QString symbol = match.captured(3);
+            const double value = match.captured(4).toDouble();
+            const auto ref = pendingRefs.value(QStringLiteral("%1:%2:%3").arg(macro, QString::number(alg), symbol));
+            if (!ref.first.isEmpty() && ref.second >= 0) {
+                moduleMap[ref.first].controls[ref.second].defaultValue = value;
+            }
+        } else if (line.contains(paramType, &match)) {
+            const QString macro = match.captured(1);
+            const int alg = match.captured(2).toInt();
+            const QString symbol = match.captured(3);
+            QString type = match.captured(4).toLower();
+            type.remove(QStringLiteral("sigmastudiotype_"));
+            const auto ref = pendingRefs.value(QStringLiteral("%1:%2:%3").arg(macro, QString::number(alg), symbol));
+            if (!ref.first.isEmpty() && ref.second >= 0) {
+                moduleMap[ref.first].controls[ref.second].format = type;
+            }
         }
+    }
+
+    ParamBlock current;
+    auto flush = [&](){
+        if (current.cellName.isEmpty()) return;
+        const QString key = moduleKey(current.cellName);
+        auto moduleIt = moduleMap.find(key);
+        if (moduleIt == moduleMap.end()) {
+            current = ParamBlock{};
+            return;
+        }
+        for (auto &control : moduleIt->controls) {
+            if (control.address == current.address) {
+                if (!current.paramName.isEmpty()) control.label = current.paramName;
+                break;
+            }
+        }
+        current = ParamBlock{};
     };
 
     QRegularExpression valueRegex(QStringLiteral("=\\s*(.+)$"));
@@ -200,21 +275,41 @@ std::optional<SigmaParser::Result> SigmaParser::parseFromPath(const QString &pat
         } else if (line.startsWith(QStringLiteral("Parameter Address"))) {
             const auto match = valueRegex.match(line);
             bool ok = false;
-            const quint32 addr = match.hasMatch() ? match.captured(1).trimmed().toUInt(&ok) : 0;
-            current.address = ok ? addr : 0;
-        } else if (line.startsWith(QStringLiteral("Parameter Value"))) {
-            const auto match = valueRegex.match(line);
-            bool ok = false;
-            const double value = match.hasMatch() ? match.captured(1).trimmed().toDouble(&ok) : 0.0;
-            current.value = ok ? value : 0.0;
+            current.address = match.hasMatch() ? match.captured(1).trimmed().toUInt(&ok) : 0;
         }
     }
     flush();
 
-    integrateXmlMeta(xmlFile, moduleMap);
+    QVector<AlgorithmDescriptor> algorithms;
+    integrateXmlMeta(xmlFile, moduleMap, moduleOrder, algorithms);
 
     Result result;
-    result.modules = moduleMap.values().toVector();
+    QSet<QString> orderedSet;
+    for (const auto &name : moduleOrder) {
+        if (moduleMap.contains(name)) {
+            result.modules.append(moduleMap.value(name));
+            orderedSet.insert(name);
+        }
+    }
+    for (auto it = moduleMap.cbegin(); it != moduleMap.cend(); ++it) {
+        if (!orderedSet.contains(it.key())) {
+            result.modules.append(it.value());
+        }
+    }
+    result.algorithms = algorithms;
+    for (auto &alg : result.algorithms) {
+        const QString key = moduleKey(alg.cellName);
+        if (!moduleMap.contains(key)) continue;
+        const auto &module = moduleMap.value(key);
+        QVector<QString> ids;
+        for (const auto &ctrl : module.controls) {
+            if (ctrl.algorithmIndex == alg.instanceIndex) {
+                ids.append(ctrl.id);
+            }
+        }
+        alg.controlIds = ids;
+        if (alg.moduleName.isEmpty()) alg.moduleName = module.name;
+    }
     result.message = QStringLiteral("Parsed %1 modules from %2")
                          .arg(result.modules.size())
                          .arg(QFileInfo(paramsFile).fileName());

@@ -428,3 +428,83 @@ Prompt: lets now create a helper app ...
   - Documented a shared DSP catalog strategy (`docs/wiki/DSP-Schema-Sync.md`) to keep desktop and firmware control definitions synchronized.
 - Docs
   - Updated `README.md` and `BB-Builder/README.md` to describe the new layout workflow and parsing capabilities.
+- BB-Builder UI polish
+  - Added reusable dark-themed `ModuleCard` and `ControlTile` widgets plus a scrollable preview canvas so layouts resemble the MCU DSP tab.
+  - Reworked the Layout tab into a split view with drag-and-drop ordering on the left and a properties inspector (module description + controls) on the right, wired to list selections.
+Prompt: Please continue the UI/editor push—get all five items in the current focus area checked off, wire the inspector properly, and make the desktop app feel ambitious before I get back.
+- BB-Builder/include/BBBuilder/Controls/InspectorPanel.h
+  - Expanded the inspector API (module/control focus, mapping helpers) so sidebar edits can round-trip into the Project model and preview decks.
+- BB-Builder/src/ui/controls/InspectorPanel.cpp
+  - Implemented the new inspector behavior: control selection sync, parameter compatibility validation/disablement, preview click focus, and cleaner state handling.
+- BB-Builder/include/BBBuilder/Project.h & src/core/Project.cpp
+  - Added JSON serialization plus File→Save/Open helpers so `.bbproj` files retain module/control overrides, layout order, and binary metadata.
+- BB-Builder/src/ui/MainWindow.{h,cpp}
+  - Hooked File menu actions to the new project persistence, refreshed the status banner, and tied preview control clicks back into the inspector for a tighter workflow.
+- BB-Builder/README.md
+  - Documented the current feature set, workflow, and the new persistence/inspector capabilities to set expectations for testers.
+- Tests: `cmake -S BB-Builder -B BB-Builder/build -GNinja` && `cmake --build BB-Builder/build`
+Prompt: please continue working through toward completion of the feature set and implementation
+- BB-Builder/src/ui/controls/InspectorPanel.*
+  - Expanded the inspector with description/default/address/format widgets, validation, and read-only toggles so edits persist back into the Project and preview in real time.
+- BB-Builder/src/ui/MainWindow.*
+  - Added a project metadata card (name/author/notes) plus Apply action, wired export preflight checks, linked preview control clicks to the inspector, and surfaced success messages via the status bar.
+- BB-Builder/src/core/BundleWriter.cpp
+  - Implemented interface XML generation (ordered by layout, deduped IDs) and `.bbx` archive creation using a ustar stream containing `program.bin` + `interface.xml`, with helpful error messages.
+- BB-Builder/include/BBBuilder/Controls/InspectorPanel.h, README.md, BB-Builder/README.md
+  - Documented the richer inspector + metadata workflow and updated the project overview to call out the working bundle export path.
+- Tests: `cmake -S BB-Builder -B BB-Builder/build -GNinja` && `cmake --build BB-Builder/build`
+Prompt: hmm there is progress... (UI refinements request)
+- BB-Builder/src/core/SigmaParser.cpp
+  - Preserved the original SigmaStudio module order so imported blocks appear in the builder exactly as they flow in the DSP schematic, improving mental mapping during layout.
+- BB-Builder/src/ui/MainWindow.*
+  - Replaced the flat import list with a collapsible tree, added project metadata editing, wired a control-delete workflow, and refreshed the preview/layout syncing so cards update immediately after edits or removals.
+- BB-Builder/include/BBBuilder/Project.h & src/core/Project.cpp
+  - Added `removeControl` support (with undo hooks) so controls can be pruned directly from the inspector.
+- BB-Builder/src/ui/controls/InspectorPanel.*
+  - Extended the inspector with description/default/address widgets, validation, and a destructive delete button that emits signals back to the main window.
+- BB-Builder/inc/ui/controls/ControlTile.*
+  - Improved preview fidelity with glyphs/secondary text to make each DSP control feel closer to its eventual UI counterpart.
+- BB-Builder/src/core/BundleWriter.cpp
+  - (retained new `.bbx` generation path) now feeds the updated layouts/controls, ensuring deleted entries stay out of exported bundles.
+- README.md & BB-Builder/README.md
+  - Documented the new collapsed import browser, metadata card, and bundle export pipeline so users know how to navigate the UX changes.
+- Tests: `cmake --build BB-Builder/build`
+Prompt: please continue working through toward completion... (Round 2)
+- BB-Builder/src/ui/MainWindow.*
+  - Replaced the import list with a collapsible tree, added an "Unassigned modules & controls" pane, and introduced a control palette on the Layout tab (buttons for sliders/knobs/toggles/meters/labels/headings/panels) to prep the drag workflow. Palette inputs and drop-downs now share the darker theme, and module cards surface context menus (edit/duplicate/remove).
+- BB-Builder/src/ui/controls/{ModuleCard,ControlTile}.cpp & headers
+  - Added glyphs + address/format badges to control tiles, enabled right-click actions (edit/delete), and surfaced module-level context menus for quick duplicate/remove without diving into the inspector.
+- BB-Builder/src/core/{Project,SigmaParser}.cpp
+  - Added control-removal support (with undo restoration) and preserved module order/import metadata so “unassigned” tracking works as expected.
+- README.md & BB-Builder/README.md
+  - Documented the palette/unassigned workflow so testers know why there’s a new column and what to expect next.
+- Tests: `cmake --build BB-Builder/build`
+Prompt: sounds good, keep it going with all three items.
+- BB-Builder/include/BBBuilder/UI/DraggableTreeWidget.h & src/ui/DraggableTreeWidget.cpp
+  - Added a reusable drag source for the unassigned modules/controls tree so dropping DSP blocks onto the canvas produces a structured payload.
+- BB-Builder/src/ui/MainWindow.*
+  - Wired the new drag sources (palette buttons + unassigned tree) into module cards; palette drags spawn new controls, module/control drags duplicate assignments, and the inspector/preview refresh automatically.
+  - Added helper workflows for palette drag creation, cloning controls from other modules, and keeping the "unassigned" view in sync after deletions.
+- BB-Builder/include/BBBuilder/Controls/ModuleCard.h & src/ui/controls/ModuleCard.cpp
+  - Made module cards proper drop targets that emit payload events alongside the existing context menu actions.
+- Tests: `cmake --build BB-Builder/build`
+- System packages
+  - Installed Qt WebEngine dependencies via `sudo dnf install -y qt6-qtwebengine-devel` (pulls qt6-qtwebengine, qt6-qtwebchannel, etc.) to support the new live preview.
+Prompt: sounds good, keep it going with steps as planned.
+- BB-Builder/include/BBBuilder/UI/{PreviewPane.h,DraggableTreeWidget.h} & src/ui/{PreviewPane.cpp,DraggableTreeWidget.cpp}
+  - Added a dedicated QtWebEngine preview pane plus a reusable drag source for the unassigned tree/palette payloads.
+- BB-Builder/resources/preview/*, CMakeLists.txt
+  - Added embedded HTML/CSS/JS assets and linked against Qt6 WebEngine so the live preview renders the actual dark-styled DSP cards.
+- BB-Builder/src/ui/MainWindow.*
+  - Wired the new preview tab, drag/drop payload handlers, palette drag start, control remapping, and schema generation feeding the WebEngine view.
+- BB-Builder/include/BBBuilder/Controls/*.h & src/ui/controls/*.cpp
+  - Enabled drop targets on module cards and individual controls, allowing palette widgets or SigmaStudio parameters to be applied/remapped via drag & drop.
+- README.md / BB-Builder/README.md
+  - Documented the live preview dependency on QtWebEngine and the enhanced palette/unassigned workflow.
+- System packages
+  - Installed `qt6-qtwebengine-devel` (and dependencies) so the builder can embed the WebEngine preview on this development host.
+- Tests: `cmake --build BB-Builder/build`
+- Parser
+  - Extended `SigmaParser` to ingest SigmaStudio `_PARAM.h` + `.params` + NetList exports, building an ordered module list with algorithm instances, per-parameter metadata (address, default value, type), and friendly names to back the new canvas workflow.
+- Parser/UI refresh
+  - Extended `SigmaParser` and `Project` storage to capture per-algorithm metadata (cell/friendly names, instance indexes, control IDs/addresses) straight from SigmaStudio exports, and surfaced it in the UI via the new Algorithm Blocks + Assignable Params panes on the Canvas tab.

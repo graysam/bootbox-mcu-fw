@@ -12,6 +12,7 @@ class SigmaParser {
 public:
     struct Result {
         QVector<ModuleDescriptor> modules;
+        QVector<AlgorithmDescriptor> algorithms;
         QString message;
         QString programBinaryPath;
         QString interfaceXmlPath;

@@ -1,0 +1,391 @@
+1. File structures
+1.1 NetList XML (X-Over_2.1.2_v2_NetList.xml)
+
+This is the graph of the SigmaStudio schematic.
+
+Root: <NetList><IC name="IC 1" type="DSPSigma100"><Schematic>…
+
+Each processing block is an <Algorithm> element, with attributes:
+
+name – internal algorithm symbol, e.g. DCBlockAlgDoublePrec1
+
+friendlyname – what the GUI shows, e.g. DC Blocking
+
+cell – the module/cell name in SigmaStudio, e.g. dc-block, Pre_Gain_Trim_Master, MAIN_HPF, etc.
+
+X-Over_2.1.2_v2_NetList
+
+location – schematic coordinates (nice to have, e.g. for visual editors)
+
+Growth, GrowthB, FS – implementation details (channel growth, sample rate etc. where present)
+
+Each <Algorithm> contains <Link> elements describing signal connections:
+
+pin – pin name on that algorithm (I_* inputs, O_* outputs)
+
+dir – in or out
+
+link – a link ID; all pins sharing the same link ID are wired together.
+
+X-Over_2.1.2_v2_NetList
+
+What it’s good for
+
+Enumerating algorithm instances, grouped by cell (module).
+
+Getting a user-facing algorithm label from friendlyname.
+
+Figuring out “this cell appears N times” (L/R, sub1/sub2, etc.).
+
+If you want to build a block-diagram view, you also have full routing.
+
+1.2 Main export XML (X-Over_2.1.2_v2.xml)
+
+This is the raw program and core registers.
+
+Inside <Schematic><IC> you get:
+
+<Name> – e.g. IC 1
+
+<PartNumber> – here Sigma100 (i.e. ADAU1701 family).
+
+X-Over_2.1.2_v2
+
+Multiple <Register> entries:
+
+<Name> – symbolic name (e.g. IC 1.CoreRegister)
+
+<Address> – base address (decimal)
+
+<AddrIncr> – address increment (0 for single, >0 for arrays)
+
+<Size> – number of bytes
+
+<Data> – sequence of 0x.. bytes.
+
+X-Over_2.1.2_v2
+
+<Program>:
+
+<Address> – start of program RAM
+
+<AddrIncr> – instruction word size (here 5 bytes)
+
+<Size> – bytes
+
+<Data> – giant instruction blob.
+
+X-Over_2.1.2_v2
+
+What it’s good for
+
+Generating the initial boot image (write this into program/core RAM at power-on).
+
+Not good for per-parameter UI – it has no concept of “parameters” beyond raw data blob.
+
+1.3 Parameter header (X-Over_2.1.2_v2_IC_1_PARAM.h)
+
+This is the authoritative map of parameter RAM.
+
+It’s organised by “Module” (SigmaStudio cell) and then parameters:
+
+/* Module dc-block - DC Blocking */
+#define MOD_DC_BLOCK_COUNT                             2
+#define MOD_DC_BLOCK_DEVICE                            "IC1"
+#define MOD_DC_BLOCK_ALG0_DCBLOCKALGDOUBLEPREC1POLE_ADDR 0
+#define MOD_DC_BLOCK_ALG0_DCBLOCKALGDOUBLEPREC1POLE_FIXPT 0x007FFCB9
+#define MOD_DC_BLOCK_ALG0_DCBLOCKALGDOUBLEPREC1POLE_VALUE SIGMASTUDIOTYPE_FIXPOINT_CONVERT(0.9999)
+#define MOD_DC_BLOCK_ALG0_DCBLOCKALGDOUBLEPREC1POLE_TYPE SIGMASTUDIOTYPE_FIXPOINT
+#define MOD_DC_BLOCK_ALG1_DCBLOCKALGDOUBLEPREC2POLE_ADDR 1
+...
+
+
+Pattern:
+
+One comment block per module:
+
+/* Module <CellName> - <Description> */
+#define MOD_<MODULE>_COUNT          N
+#define MOD_<MODULE>_DEVICE         "IC1"
+
+
+where <CellName> matches cell in the NetList (Mains_Trim, MAIN_HPF, PHASE_SWL_2 etc.), and <MODULE> is that name uppercased with punctuation massaged (MAIN_HPF, PRE_GAIN_TRIM_MASTER, etc.).
+
+Then for each parameter:
+
+#define MOD_<MODULE>_ALG<k>_<SOME_LONG_PARAM_SYMBOL>_ADDR   <int>
+#define MOD_<MODULE>_ALG<k>_<SOME_LONG_PARAM_SYMBOL>_FIXPT  0x........
+#define MOD_<MODULE>_ALG<k>_<SOME_LONG_PARAM_SYMBOL>_VALUE  SIGMASTUDIOTYPE_XXX_CONVERT(<float>)
+#define MOD_<MODULE>_ALG<k>_<SOME_LONG_PARAM_SYMBOL>_TYPE   SIGMASTUDIOTYPE_XXX
+
+
+where:
+
+ALG<k> = instance index within that module (0-based). For stereo modules you’ll see ALG0_... & ALG1_....
+
+_ADDR = parameter RAM address (integer index).
+
+_FIXPT = 32-bit fixed-point value (big-endian).
+
+_VALUE = same, but as float literal inside the CONVERT macro.
+
+_TYPE = SIGMASTUDIOTYPE_FIXPOINT, SIGMASTUDIOTYPE_INTEGER, etc.
+
+So this file gives you:
+
+Full list of parameter RAM addresses that are safe-load-able.
+
+Grouping by module/cell and by algorithm instance.
+
+A clear data type for each parameter.
+
+A default value for each parameter, both as float and raw hex.
+
+This is the main goldmine for your interface-builder.
+
+1.4 .params text file (X-Over_2.1.2_v2.params)
+
+This is a more human-readable parameter listing, repeating the same information:
+
+Cell Name         = dc-block
+Parameter Name    = DCBlockAlgDoublePrec1pole
+Parameter Address = 0
+Parameter Value   = 0.999899983406067
+Parameter Data :
+0x00, 0x7F, 0xFC, 0xB9,
+
+
+Repeated for every parameter.
+
+Cell Name – same as cell / Module (dc-block, Mains_Trim, MAIN_HPF, …).
+
+Parameter Name – short symbol (often algorithm name + field).
+
+Parameter Address – same address as _ADDR in the header.
+
+Parameter Value – float.
+
+Parameter Data – 4 bytes of the fixed-point representation (big-endian, matches _FIXPT).
+
+Useful for:
+
+Debugging and cross-checking your parser.
+
+Maybe for generating slightly nicer user labels from Parameter Name.
+
+1.5 Register header (X-Over_2.1.2_v2_IC_1_REG.h)
+
+This is control and core register definitions:
+
+Macros with _ADDR, _BYTE, _VALUE for core registers (ADC, DAC, PLL, etc.).
+
+Bitfield helpers (*_MASK, *_SHIFT) for control words.
+
+Includes at least one safeload-related macro, e.g.:
+
+#define R13_SAFELOAD_IC_1 0x0
+#define R13_SAFELOAD_IC_1_MASK 0x20
+#define R13_SAFELOAD_IC_1_SHIFT 5
+
+
+This is mainly for the low-level I²C driver / initialisation code and for implementing the safeload transaction mechanics (addresses of safeload data/target/trigger registers).
+
+2. What the app actually needs
+
+For your UI/“interface builder” you basically need to end up with a per-algorithm description like:
+
+{
+  "algorithmId": "Gain1940AlgNS1",
+  "cell": "Mains_Trim",
+  "friendlyName": "Gain (no slew)",
+  "instanceIndex": 0,
+  "parameters": [
+    {
+      "id": "GAIN",
+      "symbol": "GAIN1940ALGNS1",
+      "address": 44,
+      "type": "FIXPOINT",
+      "defaultFloat": 0.7943282347,
+      "defaultHex": "0x0065AC8C",
+      "rawBytes": [0x00, 0x65, 0xAC, 0x8C]
+    }
+  ]
+}
+
+
+plus a separate, static UI-metadata layer that says “this parameter is called Main gain L, unit dB, valid range e.g. [-60, +6], use log slider”.
+
+You cannot get the real semantic range (min/max, units, log/linear, etc.) purely from the exports – you’ll need a small curated table keyed by (cellName, logicalParamId).
+
+3. Parsing strategy
+
+I’d document a pipeline like this for the engineers:
+
+Step 1 – Parse modules & parameters from IC_1_PARAM.h
+
+Split into modules
+
+Scan for lines matching /* Module ... */ and treat each as the start of a module block.
+
+Extract:
+
+moduleDisplayName from the comment (Module MAIN_HPF - General (2nd order)).
+
+Canonical moduleName from the MOD_<MODULE>_COUNT macro that follows.
+
+Record moduleInstanceCount from MOD_<MODULE>_COUNT.
+
+Inside each module, collect parameter definitions:
+
+Look for groups of four macros with identical base name:
+
+..._ADDR <int>
+
+..._FIXPT <hex>
+
+..._VALUE SIGMASTUDIOTYPE_XXX_CONVERT(<float>)
+
+..._TYPE SIGMASTUDIOTYPE_XXX
+
+Parse:
+
+algIndex from _ALG<k>_ if present (0,1,…). If there’s no ALGk in the name, treat it as ALG0.
+
+logicalSymbol from the tail, e.g. STAGE0_B0, ATTENUATION, RMS, etc.
+
+addr = integer.
+
+type = FIXPOINT / INTEGER / … (strip the macro wrapper).
+
+defaultFloat from inside the CONVERT() macro.
+
+defaultHex and rawBytes from _FIXPT.
+
+Emit a structure like:
+
+{
+  "moduleName": "MAIN_HPF",
+  "cellName": "MAIN_HPF",      // will be matched with NetList
+  "instanceCount": 5,
+  "params": [
+    {
+      "algIndex": 0,
+      "symbol": "STAGE0_B0",
+      "fullCName": "MOD_MAIN_HPF_ALG0_STAGE0_B0",
+      "address": 48,
+      "type": "FIXPOINT",
+      "defaultFloat": 0.9889542481,
+      "defaultHex": "0x007E960D"
+    },
+    …
+  ]
+}
+
+Step 2 – Parse algorithm instances from NetList XML
+
+Parse X-Over_2.1.2_v2_NetList.xml with any XML library.
+
+For each <Algorithm> under <NetList>/<IC>/<Schematic>:
+
+Extract:
+
+algorithmName (name attribute; e.g. Gain1940AlgNS1)
+
+friendlyName (friendlyname; e.g. Gain (no slew))
+
+cellName (cell; e.g. Mains_Trim)
+
+location (optional, but nice)
+
+The list of <Link> elements, if you care about routing.
+
+X-Over_2.1.2_v2_NetList
+
+Group algorithms by cellName. Within each group, assign a 0-based instance index in order of appearance:
+
+Example: cell Pre_Gain_Trim_Master has two algorithms in the NetList:
+
+Index 0 → left trim
+
+Index 1 → right trim
+
+This aligns with the _ALG0_, _ALG1_ indices in IC_1_PARAM.h (you can confirm by address and value).
+
+Emit AlgorithmInstance objects:
+
+{
+  "cellName": "Mains_Trim",
+  "moduleName": "MAINS_TRIM",
+  "instanceIndex": 0,
+  "algorithmName": "Gain1940AlgNS1",
+  "friendlyName": "Gain (no slew)",
+  "links": [ ... ]
+}
+
+
+Use a simple mapping from cellName to moduleName (uppercasing, replacing spaces and punctuation with underscores, or better: parse the module comment names from the header and match them case-insensitively).
+
+Step 3 – Join algorithms to parameters
+
+Now join the two worlds:
+
+For each AlgorithmInstance:
+
+Find the Module whose moduleName matches that instance’s cellName (after normalisation).
+
+Take all parameters from that module where algIndex == instanceIndex.
+
+Attach them as that algorithm’s parameter list.
+
+Result (conceptually):
+
+{
+  "algorithmName": "StdRMSCompressorAlgIndp_SecondGen1",
+  "cellName": "Compressor1",
+  "friendlyName": "Independent Standard Stereo RMS Second Gen",
+  "instanceIndex": 0,
+  "parameters": [
+    {
+      "id": "THRESHOLD",
+      "symbol": "STDRMSCOMPRESSORALGINDPSECONDGEN1THRESHOLD",
+      "address": 9,
+      "type": "FIXPOINT",
+      "defaultFloat": -18.0,
+      ...
+    },
+    ...
+  ]
+}
+
+
+If you want nicer ids like THRESHOLD, RATIO, etc., you can:
+
+Derive them from the trail of the C symbol (..._THRESHOLD → THRESHOLD).
+
+Or use Parameter Name from .params as a shorter label.
+
+And optionally apply a manual mapping table per module ("THRESHOLD" → label Threshold (dB)).
+
+Step 4 – Safeload write details
+
+The per-parameter structures above give you:
+
+Parameter RAM address (0-based SigmaDSP param index).
+
+Data type & default value.
+
+The fixed-point representation if you want to reverse-engineer the format.
+
+The I²C/safeload layer then only needs:
+
+The safeload register addresses and control bits (from IC_1_REG.h and/or datasheet).
+
+A standard routine: “take (address, floatValue), convert to fixed-point 5.23 (for Sigma100), queue a safeload entry, trigger it at frame boundary”.
+
+So the separation of concerns is:
+
+Interface builder / parser: produces a stable mapping
+
+(algorithmInstanceId, parameterId) -> { address, type, scalingHint?, … }.
+
+DSP driver: knows how to do the safeload protocol and fixed-point conversion for this chip family.
