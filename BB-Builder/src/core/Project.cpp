@@ -140,6 +140,9 @@ void Project::setAlgorithms(const QVector<AlgorithmDescriptor> &algorithms) {
     dirty_ = true;
 }
 
+EditorSettings &Project::editor() { return editor_; }
+const EditorSettings &Project::editor() const { return editor_; }
+
 bool Project::removeControl(const QString &moduleName, const QString &controlId) {
     if (auto *module = findModule(moduleName)) {
         const int before = module->controls.size();
@@ -254,6 +257,17 @@ QJsonObject Project::toJson() const {
         layoutArray.append(layoutObj);
     }
     root.insert(QStringLiteral("layout"), layoutArray);
+    if (!canvasWidgets_.isEmpty()) {
+        root.insert(QStringLiteral("canvas"), canvasWidgets_);
+    }
+    QJsonObject editorObj;
+    editorObj.insert(QStringLiteral("algPanelHeight"), editor_.algPanelHeight);
+    editorObj.insert(QStringLiteral("snap"), editor_.snap);
+    editorObj.insert(QStringLiteral("grid"), editor_.grid);
+    editorObj.insert(QStringLiteral("zoom"), editor_.zoom);
+    editorObj.insert(QStringLiteral("panX"), editor_.panX);
+    editorObj.insert(QStringLiteral("panY"), editor_.panY);
+    root.insert(QStringLiteral("editor"), editorObj);
     return root;
 }
 
@@ -333,6 +347,21 @@ bool Project::fromJson(const QJsonObject &object, QString *errorMessage) {
         entry.moduleName = layoutObj.value(QStringLiteral("module")).toString();
         entry.displayLabel = layoutObj.value(QStringLiteral("label")).toString(entry.moduleName);
         layoutModules_.append(entry);
+    }
+    // Optional canvas widgets
+    const auto canvasArray = object.value(QStringLiteral("canvas")).toArray();
+    canvasWidgets_ = QJsonArray();
+    for (const auto &it : canvasArray) canvasWidgets_.append(it);
+
+    // Editor settings
+    const auto editorObj = object.value(QStringLiteral("editor")).toObject();
+    if (!editorObj.isEmpty()) {
+        editor_.algPanelHeight = editorObj.value(QStringLiteral("algPanelHeight")).toDouble(220.0);
+        editor_.snap = editorObj.value(QStringLiteral("snap")).toBool(true);
+        editor_.grid = editorObj.value(QStringLiteral("grid")).toDouble(12.0);
+        editor_.zoom = editorObj.value(QStringLiteral("zoom")).toDouble(1.0);
+        editor_.panX = editorObj.value(QStringLiteral("panX")).toDouble(0.0);
+        editor_.panY = editorObj.value(QStringLiteral("panY")).toDouble(0.0);
     }
     return true;
 }

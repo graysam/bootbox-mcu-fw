@@ -7,6 +7,8 @@
 #include <QSaveFile>
 #include <QSet>
 #include <QXmlStreamWriter>
+#include <QJsonArray>
+#include <QJsonObject>
 
 #include <algorithm>
 #include <cmath>
@@ -45,6 +47,23 @@ QByteArray renderInterfaceXml(const BBB::Project &project, QString *errorMessage
         }
     };
 
+    // 1) If canvas is present, order strictly by canvas widgets with module+control bindings.
+    const QJsonArray canvas = project.canvas();
+    if (!canvas.isEmpty()) {
+        for (const auto &v : canvas) {
+            const auto o = v.toObject();
+            const QString mod = o.value(QStringLiteral("module")).toString();
+            const QString cid = o.value(QStringLiteral("control")).toString();
+            if (mod.isEmpty() || cid.isEmpty()) continue;
+            if (seen.contains(cid)) continue;
+            if (const auto *ctrl = project.findControl(mod, cid)) {
+                ordered.append(*ctrl);
+                seen.insert(cid);
+            }
+        }
+    }
+
+    // 2) Append remaining controls based on layout order, then any leftovers.
     QSet<QString> layoutModules;
     for (const auto &entry : project.layout()) {
         if (layoutModules.contains(entry.moduleName)) continue;
@@ -232,5 +251,9 @@ bool BundleWriter::writeBundle(const Project &project, const QString &outputPath
 }
 
 QString BundleWriter::lastError() const { return lastError_; }
+
+QByteArray BundleWriter::buildInterfaceXml(const Project &project, QString *errorMessage) {
+    return renderInterfaceXml(project, errorMessage);
+}
 
 } // namespace BBB

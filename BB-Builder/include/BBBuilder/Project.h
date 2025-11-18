@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QString>
 #include <QVector>
 
@@ -50,6 +51,15 @@ struct ProjectMeta {
     QString description;
 };
 
+struct EditorSettings {
+    double algPanelHeight = 220.0;
+    bool snap = true;
+    double grid = 12.0;
+    double zoom = 1.0;
+    double panX = 0.0;
+    double panY = 0.0;
+};
+
 class Project {
 public:
     Project();
@@ -93,6 +103,13 @@ public:
     void setDirty(bool value);
     void setAlgorithms(const QVector<AlgorithmDescriptor> &algorithms);
 
+    // Optional UI layout payload (canvas). Stored as JSON array of widgets.
+    QJsonArray canvas() const { return canvasWidgets_; }
+    void setCanvas(const QJsonArray &widgets) { canvasWidgets_ = widgets; dirty_ = true; }
+
+    EditorSettings &editor();
+    const EditorSettings &editor() const;
+
 private:
     ProjectMeta meta_;
     QVector<ModuleDescriptor> modules_;
@@ -100,6 +117,8 @@ private:
     QVector<LayoutModule> layoutModules_;
     QString programBinaryPath_;
     bool dirty_ = false;
+    QJsonArray canvasWidgets_;
+    EditorSettings editor_;
 
     QJsonObject toJson() const;
     bool fromJson(const QJsonObject &object, QString *errorMessage);

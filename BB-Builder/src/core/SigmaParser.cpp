@@ -133,7 +133,11 @@ std::optional<SigmaParser::Result> SigmaParser::parseFromPath(const QString &pat
     if (paramsFile.isEmpty()) {
         return std::nullopt;
     }
-    const QString xmlFile = locateFile(info, {QStringLiteral("*.xml")});
+    // Prefer NetList for algorithm metadata, fall back to any XML
+    QString xmlFile = locateFile(info, {QStringLiteral("*_NetList.xml"), QStringLiteral("*NetList.xml")});
+    if (xmlFile.isEmpty()) {
+        xmlFile = locateFile(info, {QStringLiteral("*.xml")});
+    }
     const QString programFile = locateFile(info, {QStringLiteral("*.bin"),
                                                   QStringLiteral("*.dat"),
                                                   QStringLiteral("*.hex")});

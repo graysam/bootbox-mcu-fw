@@ -1,59 +1,56 @@
 cmake_minimum_required(VERSION 3.24)
-project(BBBuilder VERSION 0.1.0 LANGUAGES CXX)
+project(BBBuilder VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_AUTOMOC ON)
-set(CMAKE_AUTORCC ON)
-set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 6.4 COMPONENTS Widgets Xml WebEngineWidgets REQUIRED)
+find_package(OpenGL REQUIRED)
+find_package(PkgConfig)
+pkg_check_modules(GLFW REQUIRED glfw3)
+find_package(Qt6 6.4 COMPONENTS Core Xml REQUIRED)
 
-set(BBBuilder_HEADERS
+set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui)
+set(TINYFD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/tinyfiledialogs)
+file(GLOB IMGUI_SOURCES
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+)
+
+set(BB_CORE_HEADERS
     include/BBBuilder/Project.h
     include/BBBuilder/SigmaParser.h
     include/BBBuilder/BundleWriter.h
     include/BBBuilder/ModuleCatalog.h
-    include/BBBuilder/Controls/ControlTile.h
-    include/BBBuilder/Controls/ModuleCard.h
-    include/BBBuilder/Controls/InspectorPanel.h
-    include/BBBuilder/UI/DraggableTreeWidget.h
-    include/BBBuilder/UI/PreviewPane.h
-    src/ui/MainWindow.h
 )
 
-set(BBBuilder_SOURCES
-    src/main.cpp
+set(BB_CORE_SOURCES
     src/core/Project.cpp
     src/core/SigmaParser.cpp
     src/core/BundleWriter.cpp
     src/core/ModuleCatalog.cpp
-    src/ui/controls/ControlTile.cpp
-    src/ui/controls/ModuleCard.cpp
-    src/ui/controls/InspectorPanel.cpp
-    src/ui/DraggableTreeWidget.cpp
-    src/ui/PreviewPane.cpp
-    src/ui/MainWindow.cpp
 )
 
-qt_add_executable(BBBuilder
-    MANUAL_FINALIZATION
-    ${BBBuilder_HEADERS}
-    ${BBBuilder_SOURCES}
+set(BB_APP_SOURCES
+    src/imgui_main.cpp
+    src/imgui_model.cpp
+    src/imgui_canvas.cpp
 )
 
-qt_add_resources(BBBuilder preview_resources
-    PREFIX "/preview"
-    FILES
-        resources/preview/preview.html
-        resources/preview/preview.css
-        resources/preview/preview.js
+add_executable(BBBuilder
+    ${BB_CORE_HEADERS}
+    ${BB_CORE_SOURCES}
+    ${BB_APP_SOURCES}
+    ${IMGUI_SOURCES}
+    ${TINYFD_DIR}/tinyfiledialogs.c
 )
 
 target_include_directories(BBBuilder PRIVATE include)
+target_include_directories(BBBuilder PRIVATE ${IMGUI_DIR} ${IMGUI_DIR}/backends ${GLFW_INCLUDE_DIRS} ${TINYFD_DIR})
 
-target_link_libraries(BBBuilder PRIVATE Qt6::Widgets Qt6::Xml Qt6::WebEngineWidgets)
+target_link_libraries(BBBuilder PRIVATE OpenGL::GL ${GLFW_LIBRARIES} Qt6::Core Qt6::Xml)
 
 install(TARGETS BBBuilder RUNTIME DESTINATION bin)
-
-qt_finalize_executable(BBBuilder)

@@ -508,3 +508,71 @@ Prompt: sounds good, keep it going with steps as planned.
   - Extended `SigmaParser` to ingest SigmaStudio `_PARAM.h` + `.params` + NetList exports, building an ordered module list with algorithm instances, per-parameter metadata (address, default value, type), and friendly names to back the new canvas workflow.
 - Parser/UI refresh
   - Extended `SigmaParser` and `Project` storage to capture per-algorithm metadata (cell/friendly names, instance indexes, control IDs/addresses) straight from SigmaStudio exports, and surfaced it in the UI via the new Algorithm Blocks + Assignable Params panes on the Canvas tab.
+2025-11-18 ImGui Builder wiring and canvas DnD
+
+Prompt/context:
+- Continue toward completion of BB-Builder feature set. Switch to Dear ImGui immediate-mode editor, hook into parser/model, and implement canvas drag/drop + inspector bindings. Build for this platform.
+
+Changes made (paths):
+- BB-Builder/src/imgui_model.h, imgui_model.cpp — Expanded retained model:
+  - Widget now tracks parent, alive flag, moduleName/controlId bindings, and children.
+  - Document adds helpers: addWidget(parent), get(id), topMostAt().
+- BB-Builder/src/imgui_canvas.cpp — Implemented canvas viewport:
+  - Pan (MMB), zoom (Ctrl+wheel), grid, selection, dragging.
+  - Accepts DnD payloads:
+    - NEW_BLOCK (module) creates a ModuleCard at drop.
+    - NEW_PARAM (module+control) creates a Slider child in a card or makes a new card + control.
+  - Draws module card headers and control tiles; replaced ImVec2 math with explicit ops for portability.
+- BB-Builder/src/imgui_main.cpp — Hooked UI shell to real data:
+  - File → Import Sigma Folder… modal prompts for export directory and uses BBB::SigmaParser to populate BBB::Project (modules, algorithms, program bin path).
+  - Components panel lists Algorithm Blocks (draggable as NEW_BLOCK) and Assignable Params for selected block (draggable as NEW_PARAM).
+  - Inspector shows selection properties; allows renaming labels and remapping a control’s parameter within its module; Delete button marks widget dead.
+- BB-Builder/CMakeLists.txt — unchanged logic, validates ImGui + QtCore/Xml linkage.
+- BB-Builder/third_party/imgui — Synced to ocornut/imgui v1.90.8; added missing headers (imgui_internal.h, stb headers, backends loader) to fix build.
+
+Build/Run:
+- Built with: cmake -S BB-Builder -B BB-Builder/build -GNinja && cmake --build BB-Builder/build
+- Resulting binary: BB-Builder/build/BBBuilder
+
+Rationale:
+- Move from Qt widgets/web preview to ImGui canvas to enable robust in-editor pan/zoom, hit-testing, and DnD without HTML sandbox constraints.
+- Wiring to BBB::Project/SigmaParser surfaces real SigmaStudio metadata, so the left panel and inspector operate on actual modules/params.
+- Minimal inspector edits (label, remap) are the foundation for undo/redo and later serialization to .bbproj + bundle interface.
+
+Notes/TODO:
+
+2025-11-18 Import + persistence + export mapping
+
+Fixes:
+- Parser now prefers NetList XML ("*_NetList.xml") so Algorithm Blocks populate. This addresses empty lists after import when the first matched XML wasn’t the NetList.
+- Import UX improved: File→Import modal and a Quick Import panel in the left sidebar; both set a status message on success/failure.
+
+Features:
+- Project save/open (.bbproj JSON) including the ImGui canvas (array of widget objects: id, parent, type, pos/size, label, module/control, children).
+- Export Bundle… menu item writes .bbx tar (program.bin + interface.xml).
+- BundleWriter orders controls by canvas bindings first (module/control pairs from canvas), then layout modules, then remaining controls.
+- Canvas draws simple visuals for Slider/Toggle/Knob to better match the embedded UI.
+
+Extras:
+- Algorithm/params list stability: added unique IDs around Selectable entries to fix selection when labels repeat.
+- Import UX updated: left-panel now uses a button→folder chooser modal (no manual path entry); same modal used from File→Import.
+
+Build:
+- Build and run BB-Builder; try importing from etc/Sigmastudio_sysfile_example, then drag blocks/params to the canvas; Save/Open project and Export Bundle.
+
+2025-11-18 Undo/snap/split panels + reliable DnD
+
+Changes:
+- Canvas now has full-surface drop target to reliably create Module Cards and controls from drags.
+- Added snap-to-grid toggle and grid size control in the canvas toolbar; movement and creation obey snap.
+- Implemented minimal undo/redo stack (create, delete, move). Bound to Edit menu (Undo/Redo) and Ctrl+Z/Ctrl+Y.
+- Dragging now records a Move command on release; create actions push Create commands.
+- Components sidebar: Algorithm Blocks and Assignable Params are independently scrollable with an adjustable splitter.
+- Persisted editor settings (algPanelHeight, snap, grid) to `.bbproj` (Project.editor).
+
+Notes:
+- Next: context menus (delete/duplicate, align), inspector geometry edits, remap-on-drop for dropping a param on a control to rebind it, and improved control visuals.
+- Undo/redo stack is not yet implemented; interactions currently mutate the model directly.
+- Deletion marks widgets inactive; a compaction pass or true erase can be added once command stack lands.
+- Export path and interface.xml generation untouched today; will map Document→Project when layout serialization is added.
+- ImGui upgraded to v1.90.8 to avoid header mismatches; vendor is in third_party/imgui.

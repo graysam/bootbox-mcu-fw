@@ -1,0 +1,25 @@
+Project: bootbox-mcu-fw
+Focus: BB-Builder desktop app (Dear ImGui + GLFW/QtCore). Firmware + web UI already working; BB-Builder now in ImGui rewrite.
+
+Current BB-Builder status (Nov 18):
+- Import flow: async native folder dialog via tinyfiledialogs; parser prefers *_NetList.xml; status text shows success/failure.
+- Canvas: pan/zoom, snap toggle + grid size, full-surface drop target, drag-move with snap, drop-to-remap parameters, widget context menus, inline rename popup, inspector geometry fields, duplicate/bring/send, Delete button pushes undo commands.
+- Undo/Redo: command stack for create/delete/move (remap/rename used via inspector); Edit menu + Ctrl+Z/Ctrl+Y.
+- Sidebar: Algorithm Blocks + Assignable Params each have filter inputs, scroll independently, and share a draggable splitter height (persisted).
+- Editor settings persisted to .bbproj (algPanelHeight, snap, grid, zoom, pan). Canvas Document also stores these.
+- Export Bundle still writes .bbx; bundle order follows canvas layout first.
+
+Open TODOs from previous plan:
+1. Multi-select (shift+click / marquee) and align/distribute tools.
+2. Context menus: add align/spacing, convert control type, smart add label/heading.
+3. Inspector: remap summary, live geometry preview, module metadata editing.
+4. Visual polish: knobs/sliders matching embedded UI (dark/blue theme, ticks, slider track). Possibly add card backgrounds matching MCU.
+5. Drag reordering within Module Cards; duplicate entire cards with offsets and control ID remap assistance.
+6. Save per-project toolbar state (snap, grid, filters) and last selected block.
+7. Long-term: integrate with bundle writer to preview ADAU schema, show HW/app error statuses, etc.
+
+Other repo notes:
+- Firmware (ESP32 Arduino) now supports ADAU bundle uploads via /api/upload/adau and dynamic UI served from LittleFS; LED patterns implemented.
+- Web UI: tabbed DSP/Cooling System, cards collapsible, pending vs applied states, plenty of ADAU UI scaffolding.
+
+Next engineer should continue from this context, especially multi-select + align/distribute and polishing canvas control visuals.
