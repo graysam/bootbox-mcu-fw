@@ -178,6 +178,8 @@ partition_offset = cfg.get("CONFIG_PARTITION_TABLE_OFFSET", "0x8000")
 flash_mode = cfg.get("CONFIG_ESPTOOLPY_FLASHMODE", "dio")
 flash_freq = cfg.get("CONFIG_ESPTOOLPY_FLASHFREQ", "80m")
 flash_size = cfg.get("CONFIG_ESPTOOLPY_FLASHSIZE", "4MB")
+chip_target = cfg.get("CONFIG_IDF_TARGET", "esp32") or "esp32"
+chip_target = chip_target.lower()
 
 data = {
     "SPIFFS_OFFSET": f"0x{parse_int(spiffs_offset_str):X}",
@@ -191,6 +193,7 @@ data = {
     "FLASH_SIZE": flash_size,
     "MKLITTLEFS": find_tool("mklittlefs", "mklittlefs"),
     "ESPTOOL": find_tool("esptool_py", ("esptool.py", "esptool")),
+    "CHIP_TARGET": chip_target,
 }
 
 for key, value in data.items():
@@ -206,7 +209,7 @@ PY
 
 eval "$PY_INFO"
 
-export FLASH_MODE FLASH_FREQ FLASH_SIZE BOOTLOADER_OFFSET PARTITION_OFFSET APP_OFFSET SPIFFS_OFFSET SPIFFS_SIZE ESPTOOL
+export FLASH_MODE FLASH_FREQ FLASH_SIZE BOOTLOADER_OFFSET PARTITION_OFFSET APP_OFFSET SPIFFS_OFFSET SPIFFS_SIZE ESPTOOL CHIP_TARGET
 
 BOOT_BIN="$BUILD_DIR/${SKETCH_BASENAME}.ino.bootloader.bin"
 APP_BIN="$BUILD_DIR/${SKETCH_BASENAME}.ino.bin"
@@ -260,6 +263,7 @@ manifest = {
     "flash_mode": os.environ["FLASH_MODE"],
     "flash_freq": os.environ["FLASH_FREQ"],
     "flash_size": os.environ["FLASH_SIZE"],
+    "chip": os.environ.get("CHIP_TARGET", "esp32"),
     "esptool": os.environ.get("ESPTOOL", ""),
     "esptool_invoker": os.environ.get("ESPTOOL_INVOKER", ""),
     "segments": [
@@ -279,7 +283,7 @@ PY
 
 if [[ $SKIP_MERGE -eq 0 ]]; then
   echo "Generating unified flash image -> $UNIFIED_BIN"
-  MERGE_CMD=("${MERGE_RUNNER[@]}" --chip esp32 merge-bin -o "$UNIFIED_BIN"
+  MERGE_CMD=("${MERGE_RUNNER[@]}" --chip "${CHIP_TARGET:-esp32}" merge-bin -o "$UNIFIED_BIN"
              --flash-mode "$FLASH_MODE" --flash-freq "$FLASH_FREQ" --flash-size "$FLASH_SIZE"
              "$BOOTLOADER_OFFSET" "$BOOT_BIN"
              "$PARTITION_OFFSET" "$PARTITION_BIN"

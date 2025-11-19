@@ -89,7 +89,8 @@ if invoker:
     cmd = [invoker, esptool_path]
 else:
     cmd = [esptool_path]
-cmd += ["--chip", "esp32", "--port", port]
+chip = manifest.get("chip", "esp32")
+cmd += ["--chip", chip, "--port", port]
 if baud:
     cmd += ["--baud", baud]
 cmd.append("write_flash" if invoker else "write-flash")

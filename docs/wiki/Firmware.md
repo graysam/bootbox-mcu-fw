@@ -11,7 +11,7 @@ The Arduino sketch (`firmware/arduino/bootbox_mcu_fw`) runs the entire controlle
 ## Architecture Highlights
 | Module | Responsibility |
 | --- | --- |
-| `config.h` | Compile-time knobs: pin map, fan type, LED polarity, thermistor defaults, ADAU I²C addresses. |
+| `config.h` | Compile-time knobs: pin map, fan type, LED polarity, thermistor defaults, ADAU I²C addresses. Auto-detects ESP32 vs ESP32-S3 targets via `CONFIG_IDF_TARGET`. |
 | `bootbox_mcu_fw.ino` | Main loop, state struct, PID/fan control, ADAU manager, REST/WS handlers, status LED scheduler. |
 | `settings.h` | Structures + helpers for loading/saving setpoints, PID gains, manual fan %, and thermistor calibration parameters. |
 | `/data/` | Web assets that get packed into LittleFS each build. |
@@ -40,3 +40,4 @@ The Arduino sketch (`firmware/arduino/bootbox_mcu_fw`) runs the entire controlle
 - Keep ADC + thermistor math in `adcToTempC()`; when adding new probes, update `config.h` defaults and the calibration table.
 - Watch heap usage via `/api/state.sys.free_heap`; enabling lots of DSP controls increases JSON document sizes—bump `StaticJsonDocument` capacities accordingly.
 - For new status LED patterns, edit the `StatusCode` enum + `applyStatusPattern()` helper so they remain centralized.
+- `/api/state.sys` exposes `idf_target`, PSRAM totals, and filesystem usage to confirm whether an ESP32 or ESP32-S3 image is running.

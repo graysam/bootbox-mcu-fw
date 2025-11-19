@@ -2,22 +2,23 @@
 
 ## Target Platforms
 - ESP32 DevKitC / generic NodeMCU-style boards (single-core or dual-core). Any module exposing GPIO21/22 and at least two 3v3 ADC-capable pins works.
+- ESP32-S3 DevKitC-1 N16R8 (16 MB flash / 8 MB PSRAM). The firmware auto-detects the target via `CONFIG_IDF_TARGET` so pin layouts swap automatically.
 - USB bridges verified:
   - **CH34x** — enumerates as `/dev/ttyUSB0`; requires `ch341` driver (default on most Linux distros).
   - **CP2102** — enumerates as `/dev/ttyUSB1`; no special driver on Linux/macOS.
 - Supply 5 V via USB for bench testing; the on-board regulator feeds 3v3 peripherals. For permanent installs power the `5V` pin from a regulated rail capable of >500 mA.
 
 ## Wiring Summary
-| Function | Default Pin(s) | Notes |
-| --- | --- | --- |
-| Thermistor 1 | GPIO34 | 10 kΩ pull-up to 3v3, probe to ground. |
-| Thermistor 2 | GPIO35 | Same topology as channel 1; both feed into the calibration workflow. |
-| Fan 1 PWM | GPIO25 | For 3-wire setups this drives a MOSFET gate; for 4-wire it connects to the PWM control lead. |
-| Fan 2 PWM | GPIO26 | Optional second fan; disable by setting `PIN_FAN2_CTRL = -1`. |
-| Tach inputs | GPIO27 / custom | Currently reserved; future RPM capture. Leave floating or tie to tach outputs via level shifter. |
-| Status LED | GPIO2 (active-low) | Override via `STATUS_LED_PIN` / `STATUS_LED_ACTIVE_HIGH` in `config.h`. |
-| I²C SDA/SCL | GPIO21 / GPIO22 | Pull-ups (2.2–4.7 kΩ) required near the MCU when cabling exceeds a few inches. |
-| ADAU RESET | Configurable | Wire to the codec’s /RESET via a transistor if voltage domains differ. Optional but recommended for reliable self-boot pushes. |
+| Function | ESP32 DevKit (WROOM) | ESP32-S3 DevKitC-1 N16R8 | Notes |
+| --- | --- | --- | --- |
+| Thermistor 1 | GPIO34 (ADC1_6) | GPIO4 (ADC1_3) | 10 kΩ pull-up to 3 V3, probe to ground. |
+| Thermistor 2 | GPIO35 (ADC1_7) | GPIO5 (ADC1_4) | Calibrate via the System tab UI to store β/nominal overrides. |
+| Fan 1 PWM | GPIO25 | GPIO16 | Drives MOSFET gate (3-wire) or PWM pin (4-wire). |
+| Fan 2 PWM | GPIO26 | GPIO17 | Optional mirror output; set to `-1` to disable. |
+| Tach inputs | GPIO27 | GPIO18 | Reserved for future RPM capture. |
+| Status LED | GPIO2 (active-low) | `LED_BUILTIN` (RGB helper) | S3 uses the onboard RGB via `digitalWrite`; set `STATUS_LED_PIN = -1` to disable. |
+| I²C SDA/SCL | GPIO21 / GPIO22 | GPIO8 / GPIO9 | Add 2.2–4.7 kΩ pull-ups close to the MCU, especially with long harnesses. |
+| ADAU RESET | Configurable (default -1) | Configurable (default -1) | Tie to the ADAU reset net if you want automatic self-boot pulses. |
 
 ## ADAU1701 Notes
 - The ADAU EEPROM (e.g., 24LC256) must be wired to the same I²C bus the MCU uses. Confirm `ADAU_EEPROM_I2C_ADDR` (typically `0x50`).
@@ -26,6 +27,7 @@
 
 ## Sensors & Calibration
 - Use β curve-compatible thermistors (10 kΩ or 100 kΩ) with matching bias resistors. The two-point calibration workflow compensates for wiring tolerances.
+- Firmware drops thermistor samples outside the -20 °C to 120 °C window so a loose probe never drives the PID loop into an extreme state.
 - For higher-voltage fans, place a logic MOSFET + flyback diode between PWM pin and load; ensure the gate reference is the MCU ground.
 
 ## Enclosure / EMI

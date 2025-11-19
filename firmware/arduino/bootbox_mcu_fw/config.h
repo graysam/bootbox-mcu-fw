@@ -2,6 +2,16 @@
 // Centralized build-time configuration for BOOTBOX DSP firmware.
 // Adjust pin assignments and fan type here before building.
 
+// -------- Target detection --------
+// Force BOOTBOX_TARGET_ESP32 or BOOTBOX_TARGET_ESP32S3 via build flags to override auto-detect.
+#if !defined(BOOTBOX_TARGET_ESP32) && !defined(BOOTBOX_TARGET_ESP32S3)
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+#define BOOTBOX_TARGET_ESP32S3 1
+#else
+#define BOOTBOX_TARGET_ESP32 1
+#endif
+#endif
+
 // -------- Fan configuration --------
 enum class FanType : uint8_t { Fan3Wire = 3, Fan4Wire = 4 };
 
@@ -10,11 +20,21 @@ static constexpr FanType kFanType = FanType::Fan3Wire; // change to Fan3Wire/Fan
 
 // PWM output pins (for 4-wire: control pin). For 3-wire: drives power via MOSFET.
 // Configure up to two fans; set secondary values to -1 to disable.
+// Defaults adjust per target so both ESP32 and ESP32-S3 devkits work out of the box.
+#if defined(BOOTBOX_TARGET_ESP32S3)
+static constexpr int PIN_FAN1_CTRL = 16;
+static constexpr int PIN_FAN2_CTRL = 17; // set to -1 to disable second fan
+#else
 static constexpr int PIN_FAN1_CTRL = 25;
 static constexpr int PIN_FAN2_CTRL = 26; // set to -1 to disable second fan
+#endif
 
 // Tachometer inputs (future use)
+#if defined(BOOTBOX_TARGET_ESP32S3)
+static constexpr int PIN_FAN1_TACH = 18;
+#else
 static constexpr int PIN_FAN1_TACH = 27;
+#endif
 static constexpr int PIN_FAN2_TACH = -1;
 
 // PWM channels
@@ -32,13 +52,27 @@ static constexpr int FAN_PWM_FREQ_3WIRE = 1000;  // power PWM; tweak to avoid au
 static constexpr uint8_t FAN3_MIN_START_PCT = 25;
 
 // -------- Status LED --------
+#if defined(BOOTBOX_TARGET_ESP32S3)
+#  ifdef LED_BUILTIN
+static constexpr int STATUS_LED_PIN = static_cast<int>(LED_BUILTIN); // maps to the onboard RGB LED helper
+#  else
+static constexpr int STATUS_LED_PIN = -1;
+#  endif
+static constexpr bool STATUS_LED_ACTIVE_HIGH = true;
+#else
 static constexpr int STATUS_LED_PIN = 2;
-// Most dev boards drive the builtin LED low to turn it on.
+// Most classic ESP32 dev boards drive the builtin LED low to turn it on.
 static constexpr bool STATUS_LED_ACTIVE_HIGH = false;
+#endif
 
 // -------- Thermal sensors --------
+#if defined(BOOTBOX_TARGET_ESP32S3)
+static constexpr int PIN_THERM1 = 4;  // ADC1_CH3
+static constexpr int PIN_THERM2 = 5;  // ADC1_CH4
+#else
 static constexpr int PIN_THERM1 = 34; // analog input (NTC divider)
 static constexpr int PIN_THERM2 = 35; // analog input (NTC divider)
+#endif
 
 // ADC characteristics (adjust when replacing adcToTempC with your curve)
 struct ThermistorParams {
@@ -54,14 +88,21 @@ static constexpr ThermistorParams THERMISTOR1_PARAMS{10000.0f, 10000.0f, 25.0f, 
 static constexpr ThermistorParams THERMISTOR2_PARAMS{10000.0f, 10000.0f, 25.0f, 4100.0f};
 
 static constexpr float ADC_FULL_SCALE = 4095.0f;
+static constexpr float THERM_VALID_MIN_C = -20.0f;
+static constexpr float THERM_VALID_MAX_C = 120.0f;
 
 // Optional serial logging for thermistor calibration (disabled in production).
 static constexpr bool THERMISTOR_DEBUG_LOG = false;
 static constexpr uint32_t THERMISTOR_DEBUG_INTERVAL_MS = 5000;
 
 // -------- ADAU1701 / I2C config --------
+#if defined(BOOTBOX_TARGET_ESP32S3)
+static constexpr int PIN_I2C_SDA = 8;
+static constexpr int PIN_I2C_SCL = 9;
+#else
 static constexpr int PIN_I2C_SDA = 21;
 static constexpr int PIN_I2C_SCL = 22;
+#endif
 static constexpr uint32_t I2C_FREQUENCY_HZ = 400000;
 
 static constexpr uint8_t ADAU_I2C_ADDR = 0x34;        // 7-bit address for ADAU1701 core

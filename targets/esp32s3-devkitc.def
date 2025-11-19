@@ -1,0 +1,13 @@
+# Target definition for the ESP32-S3 DevKitC-1 (16MB flash / 8MB PSRAM)
+TARGET_ID=esp32s3-devkitc
+TARGET_NAME="ESP32-S3 DevKitC-1 (16MB/8MB)"
+FQBN="esp32:esp32:esp32s3"
+FQBN_OPTIONS="FlashSize=16M,PSRAM=opi,USBMode=hwcdc,PartitionScheme=custom"
+BUILD_DIR=".arduino-build-s3"
+PARTITIONS_FILE="targets/esp32s3-devkitc.partitions.csv"
+FLASH_SIZE_BYTES=16777216
+UPLOAD_PORT="/dev/ttyACM0"
+UPLOAD_BAUD=921600
+PORT_ID_VENDOR="1a86"
+PORT_ID_MODEL="55d3"
+PORT_ID_SERIAL="5B14091905"

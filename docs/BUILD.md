@@ -34,6 +34,22 @@ This will:
 - Generate `flash-manifest.json` describing all flash segments.
 - Produce `.unified.bin` (bootloader + app + LittleFS) for convenience.
 
+For **ESP32-S3 DevKitC-1 (16MB flash / 8MB PSRAM)** pass the board options Arduino CLI expects and keep a dedicated build folder so the sdkconfig artifacts do not collide with the ESP32 build:
+
+```
+ARDUINO_CLI_CONFIG=./arduino-cli.yaml tools/arduino-build.sh \
+  --fqbn 'esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,USBMode=hwcdc,PartitionScheme=custom' \
+  --build-path .arduino-build-s3
+```
+
+The helper parses `sdkconfig` to detect the chip (`CONFIG_IDF_TARGET`) so the generated manifest + merged image carry the correct `--chip esp32s3` metadata.
+
+## Target Definitions & Helper Script
+- `targets/*.def` describe each board/variant. Fields cover: `FQBN` + menu options, build directory, full flash size (used to validate the matching `targets/*.csv` partition file), upload port/baud, and optional `PORT_ID_*` hints that let the helper confirm the `/dev/tty*` device via `udevadm`.
+- `targets/*.partitions.csv` provide explicit layouts so the LittleFS/data partition uses every byte of flash advertised in the `.def`.
+- `tools/target-build.sh --target esp32s3-devkitc --flash` copies the declared partition CSV into the sketch (temporarily), runs `arduino-build.sh` with the composed FQBN string, and flashes via the serialized port if requested. Use `--build-only` (default) to skip flashing, `--flash-only` to reuse an existing build, or `--list` to enumerate definitions. Launching the script without arguments opens an interactive UI where you can pick a .def, tweak serial/baud/strict validation, manage definition files, and then trigger build/flash actions.
+- Use `--skip-identity` if you're pairing a new board and haven't filled out the VID/PID/serial in the `.def` file yet.
+
 ## Upload (firmware + LittleFS)
 
 ```
@@ -43,6 +59,14 @@ PORT=/dev/ttyUSB0 ARDUINO_CLI_CONFIG=./arduino-cli.yaml tools/arduino-upload.sh 
 ```
 
 `arduino-upload.sh` rebuilds by default; add `--no-build` to reuse existing artifacts. The script flashes every segment listed in `flash-manifest.json`, so the web UI is always deployed alongside the firmware.
+
+ESP32-S3 boards usually enumerate as `/dev/ttyACM0` when `USBMode=hwcdc`. Point the upload helper at the S3 build artifacts:
+
+```
+PORT=/dev/ttyACM0 ARDUINO_CLI_CONFIG=./arduino-cli.yaml tools/arduino-upload.sh \
+  --fqbn 'esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,USBMode=hwcdc,PartitionScheme=custom' \
+  --build-path .arduino-build-s3
+```
 
 > Tip: CP2102 USB bridges usually enumerate as `/dev/ttyUSB0`, while CH34x sometimes appear as `/dev/ttyUSB1`. Use `ls /dev/ttyUSB*` or `dmesg | tail` after plugging in to confirm.
 

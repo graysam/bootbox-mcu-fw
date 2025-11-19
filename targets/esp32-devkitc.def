@@ -1,0 +1,19 @@
+# Target definition for the classic ESP32 DevKitC (WROOM, 4MB flash)
+TARGET_ID=esp32-devkitc
+TARGET_NAME="ESP32 DevKitC (4MB)"
+FQBN="esp32:esp32:esp32"
+# Board menu overrides appended after the fqbn (comma-separated key=value pairs)
+FQBN_OPTIONS="FlashSize=4M,PartitionScheme=custom"
+# Build artifacts land under this directory (relative to repo root unless absolute)
+BUILD_DIR=".arduino-build-esp32"
+# Custom partition table sized to use the full 4MB flash
+PARTITIONS_FILE="targets/esp32-devkitc.partitions.csv"
+# Expected flash size in bytes (used to validate the partition file)
+FLASH_SIZE_BYTES=4194304
+# Serial flashing parameters
+UPLOAD_PORT="/dev/ttyUSB0"
+UPLOAD_BAUD=921600
+# Optional identity check (leave blank to skip matching)
+PORT_ID_VENDOR=""
+PORT_ID_MODEL=""
+PORT_ID_SERIAL=""

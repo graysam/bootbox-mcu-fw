@@ -393,3 +393,50 @@ Prompt: please now put some good effort into detailed documentation on the wiki 
   - Converted to a table-driven cheat sheet with additional DSP/network tips and serial debugging guidance.
 - README.md
   - Linked to the expanded wiki, highlighting where to find bundle, build, and calibration guides.
+Prompt: check out where we're at and familiarise yourself with the code and ethos. going to be working on the firmware today and cleaning it up, checking for bugs, and doing any review necessary to make the codebase dual-target, building and optimising for ESP32-S3 (devkit version, 16M Flash, 8M PSRAM).
+- README.md / docs/wiki/*
+  - Reviewed the published architecture, hardware assumptions, and workflow expectations so upcoming firmware changes stay aligned with the documented ethos.
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino, config.h, settings.h
+  - Skimmed runtime modules (Wi-Fi/AP stack, DSP manager, thermal control, fan PWM, status LED) and configuration hooks to map out potential ESP32-S3 deltas; no code edits yet.
+- tools/arduino-*.sh
+  - Read the build/upload/library helper scripts to understand how FQBN, partition data, and LittleFS assets are derived, informing the dual-target plan.
+Prompt: get into it! take initiative, do your best work, and remember this thing needs to be rock-solid and user-proof -- so keep UX and reliability front of mind!
+- firmware/arduino/bootbox_mcu_fw/config.h
+  - Added automatic ESP32 vs ESP32-S3 detection (via `CONFIG_IDF_TARGET` with manual override hooks) and introduced target-specific pin defaults for fans, thermistors, I²C, and status LED polarity so both devkits work without editing the file.
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
+  - Included psram helpers, guarded Status LED initialization when no pin is defined, hardened thermistor sampling for disabled pins, and expanded `/api/state` with PSRAM + IDF target telemetry for better UX diagnostics.
+- tools/arduino-build.sh / tools/arduino-upload.sh
+  - Taught the build script to capture the chip type from `sdkconfig`, propagate it through `flash-manifest.json`, and use it when merging binaries; the uploader now respects that metadata so `esptool` flashes ESP32 or ESP32-S3 correctly.
+- README.md / docs/BUILD.md / docs/wiki/*
+  - Documented the dual-target workflow (FQBN strings, build/upload examples, release packaging expectations) plus new hardware tables, troubleshooting tips, and UI callouts for the additional system telemetry.
+- Builds
+  - Verified both targets compile by running `tools/arduino-build.sh --fqbn esp32:esp32:esp32` and `... --fqbn 'esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,USBMode=hwcdc,PartitionScheme=default_8MB' --build-path .arduino-build-s3`.
+Prompt: can you please update the build tooling:- set it up so we can choose via flags which target 'definition' we are targeting, which should take the form of .def files inside a particular relative directory, or specified explicitly via flag. each target has one .def file defining all relevant characteristics of the system, or to put it another way, it describes all of the ways it can differ from other boards, such that the build system has all the information it needs to compile the binaries, create the filesystem and partitions (which utilise full storage capacity as defined in the .def file), enable/configure board-specific build flags such as PSRAM utilisation, and flash a connected board (def file contains the /dev/tty* path and uids necessary to confirm board location and identity[if desired]). The idea is to create a build script/system that is flexible and easy to reconfigure, but also very fast to use. As such, could you create the described tooling/script/s and .def files for both the ESP32-devkitC (esp32:esp32:esp32) and the ESP32-S3 (esp32s3:esp32s3:esp32s3), with 16M flash and 8M PSRAM. hoping to see this reflected in the web interface once the new build system has compiled and flashed.
+- targets/
+  - Added per-board manifests (`esp32-devkitc.def`, `esp32s3-devkitc.def`) plus custom partition CSVs sized to use 100 % of the flash for each device. Definitions capture FQBN overrides, flash size validation, upload port identity metadata, and dedicated build folders.
+- tools/target-build.sh
+  - New helper that ingests a `.def` file, validates the partition layout against the declared flash capacity, copies the partition CSV into the sketch for the build, and optionally flashes the board after verifying its VID/PID/serial via `udevadm`. Supports `--flash`, `--flash-only`, `--list`, and `--skip-identity`.
+- README.md / docs/BUILD.md / docs/wiki/Build-and-Flash.md / docs/wiki/Release-Process.md / docs/wiki/Troubleshooting.md
+  - Documented the target-definition workflow, updated command examples to use the new custom partition scheme, and described how to extend or list the available targets.
+- Build & flash
+  - Ran `tools/target-build.sh --target esp32s3-devkitc --flash` to regenerate the firmware/LittleFS image with the 16MB partition table and deploy it to `/dev/ttyACM0`, verifying the new tooling end-to-end.
+Prompt: can you please add more robust handling of invalid/not-present thermistor conditions? I don't wan't the cooling/pid system to enter an extreme state or think that a temperature in the hundreds of degrees, or below -20c is a valid sensor input
+- firmware/arduino/bootbox_mcu_fw/config.h
+  - Introduced `THERM_VALID_MIN_C`/`THERM_VALID_MAX_C` so the acceptable range is centralized alongside the other thermal knobs.
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
+  - Added a sanitization helper that converts out-of-range readings to `NaN`, rate-limits a log entry per channel, and prevents the PID loop from reacting to floating/broken probes.
+- README.md / docs/wiki/Hardware.md
+  - Documented the new guardrail so users know out-of-bounds temperatures are ignored automatically.
+Prompt: please add an interactive mode for the build tooling if invoked without valid args...
+- tools/target-build.sh
+  - Rebuilt the helper around an interactive core: when run without CLI flags it now presents a menu to select/edit/deduplicate/delete `.def` files, tweak serial/baud/strict validation overrides, and trigger build/flash operations. Added safety prompts that can generate a new `.def` using the connected board’s VID/PID/serial if strict validation fails.
+- tools/target-build.sh
+  - Corrected the definition enumerator to read every `.def` in the targets directory (using `mapfile`), so both ESP32 and ESP32-S3 manifests show up in the interactive manager/`--list` output.
+- README.md / docs/BUILD.md / docs/wiki/Build-and-Flash.md
+  - Documented the interactive workflow and how to launch it, alongside the existing CLI examples.
+- tools/target-build.sh
+  - Added a `cls()` helper plus fail-safe prompting so interactive sessions clear the screen per menu, guard against missing `flash-manifest.json`, and fall back to the menu with corrective actions instead of exiting when builds or uploads fail.
+- tools/target-build.sh
+  - Added screen clearing to all interactive menus (main dashboard, definition selector, overrides dialog, definition manager) so the UI refreshes cleanly as you navigate.
+- tools/target-build.sh
+  - Enhanced the interactive flow to keep users inside the menu: status messages persist across clears, build/flash actions now pause (success or error) instead of exiting, and missing artifacts (e.g., `flash-manifest.json`) trigger guided fixes or automatic rebuilds before flashing.

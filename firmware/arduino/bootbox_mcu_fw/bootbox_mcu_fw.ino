@@ -8,6 +8,7 @@
 #include <AsyncJson.h>
 #include <ArduinoJson.h>
 #include <esp32-hal-ledc.h>
+#include <esp32-hal-psram.h>
 #include <esp_system.h>
 #include <vector>
 #include <algorithm>
@@ -294,6 +295,10 @@ void update() {
 }
 
 void init() {
+  if (PIN < 0) {
+    ready = false;
+    return;
+  }
   pinMode(PIN, OUTPUT);
   ready = true;
   set(Status::Boot, true);
@@ -1024,12 +1029,29 @@ static float thermistorAdcToC(int adc, const ThermistorParams& params) {
   return temperature_k - 273.15f;
 }
 
+static uint32_t last_invalid_temp_log_ms[2] = {0, 0};
+
+static float sanitizeTemperature(float value, uint8_t channel) {
+  if (!std::isfinite(value)) return NAN;
+  if (value < THERM_VALID_MIN_C || value > THERM_VALID_MAX_C) {
+    uint32_t now = millis();
+    if (now - last_invalid_temp_log_ms[channel] > 5000) {
+      last_invalid_temp_log_ms[channel] = now;
+      addLog(String("therm") + (channel + 1) + " reading out of range -> ignored");
+    }
+    return NAN;
+  }
+  return value;
+}
+
 static void sampleSensors() {
   // Read analog temps; if pins unconnected, values may float
-  int a1 = analogRead(PIN_THERM1);
-  int a2 = analogRead(PIN_THERM2);
-  state.temp1 = thermistorAdcToC(a1, thermistor_params[0]);
-  state.temp2 = thermistorAdcToC(a2, thermistor_params[1]);
+  int a1 = (PIN_THERM1 >= 0) ? readThermAdc(0) : -1;
+  int a2 = (PIN_THERM2 >= 0) ? readThermAdc(1) : -1;
+  float t1 = (a1 >= 0) ? thermistorAdcToC(a1, thermistor_params[0]) : NAN;
+  float t2 = (a2 >= 0) ? thermistorAdcToC(a2, thermistor_params[1]) : NAN;
+  state.temp1 = sanitizeTemperature(t1, 0);
+  state.temp2 = sanitizeTemperature(t2, 1);
   // TODO: tach read via PCNT or RMT; set to 0 for now
   if (THERMISTOR_DEBUG_LOG) {
     static uint32_t last_report = 0;
@@ -1083,11 +1105,18 @@ static void fillSystemInfo(JsonObject obj) {
   obj["uptime_ms"] = millis();
   obj["free_heap"] = ESP.getFreeHeap();
   obj["heap_size"] = ESP.getHeapSize();
+  bool psram = psramFound();
+  obj["psram_enabled"] = psram;
+  obj["psram_total"] = psram ? ESP.getPsramSize() : 0;
+  obj["psram_free"] = (psram && ESP.getPsramSize() > 0) ? ESP.getFreePsram() : 0;
   obj["cpu_freq_mhz"] = ESP.getCpuFreqMHz();
   obj["fw_version"] = FW_VERSION;
   obj["fw_build"] = FW_BUILD;
   obj["sdk"] = ESP.getSdkVersion();
   obj["chip"] = CHIP_LABEL;
+#if defined(CONFIG_IDF_TARGET)
+  obj["idf_target"] = CONFIG_IDF_TARGET;
+#endif
   obj["chip_revision"] = ESP.getChipRevision();
   obj["reset_reason"] = RESET_REASON_LABEL;
   obj["boot_count"] = boot_count;

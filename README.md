@@ -3,11 +3,14 @@
 Firmware for a Wi-Fi MCU system controller for a DIY car stereo using an ADAU1701 DSP. The controller hosts a local web UI, provides a robust WebSocket control channel, manages thermal control (PID/manual), and stores presets/assets in LittleFS.
 
 ## Quick Start
-- Board: target pinout matches DevKit-style layouts by default (adjust in `config.h` as needed).
+- Fast path: `tools/target-build.sh --target esp32s3-devkitc --flash` (or `esp32-devkitc`) reads `targets/<name>.def`, installs the right partition map, compiles, and uploads the image + LittleFS in one step.
+- Board: ESP32 DevKit and ESP32-S3 DevKitC-1 (16MB flash / 8MB PSRAM) are auto-detected at build time; edit `config.h` if you wire a custom harness or add a new `.def` file.
 - Build + package (Arduino CLI):
   - `ARDUINO_CLI_CONFIG=./arduino-cli.yaml tools/arduino-build.sh --fqbn esp32:esp32:esp32`
+  - ESP32-S3 example: `ARDUINO_CLI_CONFIG=./arduino-cli.yaml tools/arduino-build.sh --fqbn 'esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,USBMode=hwcdc,PartitionScheme=custom' --build-path .arduino-build-s3`
 - Upload firmware **and** LittleFS:
   - `PORT=/dev/ttyUSB0 ARDUINO_CLI_CONFIG=./arduino-cli.yaml tools/arduino-upload.sh --fqbn esp32:esp32:esp32`
+  - ESP32-S3 example: `PORT=/dev/ttyACM0 ARDUINO_CLI_CONFIG=./arduino-cli.yaml tools/arduino-upload.sh --fqbn 'esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,USBMode=hwcdc,PartitionScheme=custom' --build-path .arduino-build-s3`
 - Optional serial monitor: `PORT=/dev/ttyUSB0 tools/arduino-monitor.sh`
 - First boot: controller starts open AP `BOOTBOXDSP` (no password). Open `http://192.168.4.1`.
 - UI assets live in `firmware/arduino/bootbox_mcu_fw/data/`; the build script repacks them into the LittleFS image automatically.
@@ -24,6 +27,7 @@ Firmware for a Wi-Fi MCU system controller for a DIY car stereo using an ADAU170
   - Control changes stream over the WebSocket (`set_dsp`) and immediately hit the mapped ADAU addresses (5.23 fixed-point by default) while remaining persistent in NVS.
   - Hardware link telemetry (`hw_ready` + `hw_error`) is broadcast alongside the schema/state so the UI can warn about ADAU reset issues or I²C write failures in real time.
 - Status LED pattern driver with distinct blink codes for boot, OK, logs, thermal, network, DSP, and critical faults.
+- `/api/state` reports PSRAM usage, IDF target, and filesystem stats so you can confirm whether an ESP32 or ESP32-S3 image is running.
 - HTTP endpoints:
   - `/api/state` (GET): temps, fan data, current DSP values, system metadata, thermistor cal state.
   - `/api/dsp/bundles` (GET): enumerate bundles (name, active flag, file presence).
@@ -41,19 +45,36 @@ Firmware for a Wi-Fi MCU system controller for a DIY car stereo using an ADAU170
   - `Thermistor-Calibration.md` — two-point workflow and REST payload examples.
 - Push the same files to `https://github.com/graysam/bootbox-mcu-fw.wiki.git` when the public wiki is enabled.
 
-## Hardware Connections (prototype)
-- Thermistors (NTC) to analog: `temp1 -> GPIO34`, `temp2 -> GPIO35`. Use voltage dividers to 3.3V; adjust ADC-to-temp curve in code.
-- Default config ships with dual 10k/10k dividers; if you swap probes or bias resistors, update `THERMISTOR*_PARAMS` in `config.h` or run the calibration wizard (System tab) to solve for nominal resistance/beta.
+## Hardware Connections
+
+| Function | ESP32 DevKit (WROOM) | ESP32-S3 DevKitC-1 (N16R8) | Notes |
+| --- | --- | --- | --- |
+| Thermistor 1 | GPIO34 (ADC1_6) | GPIO4 (ADC1_3) | 10 kΩ pull-up to 3v3, probe to ground. |
+| Thermistor 2 | GPIO35 (ADC1_7) | GPIO5 (ADC1_4) | Same harness as channel 1. |
+| Fan 1 PWM | GPIO25 | GPIO16 | Drives MOSFET gate (3-wire) or PWM lead (4-wire). |
+| Fan 2 PWM | GPIO26 | GPIO17 | Optional; set to `-1` to disable. |
+| Tach input | GPIO27 | GPIO18 | Reserved for future RPM capture. |
+| Status LED | GPIO2 (active-low) | `LED_BUILTIN` (RGB, active-high) | Set `STATUS_LED_PIN = -1` to disable. |
+| I²C SDA/SCL | GPIO21 / GPIO22 | GPIO8 / GPIO9 | Pull-ups (2.2–4.7 kΩ) recommended near the MCU. |
+| ADAU RESET | Configurable (default -1) | Configurable (default -1) | Tie to codec reset through a transistor if voltages differ. |
+
+- Thermistors (NTC) feed the ADC inputs above; the calibration wizard (System tab) solves for nominal resistance/β and persists to NVS so you rarely have to recompile.
+- Readings below -20 °C or above 120 °C are ignored automatically so the PID loop never reacts to a floating/broken probe.
 - Fan control:
-  - Global setting in `firmware/arduino/bootbox_mcu_fw/config.h` → `kFanType` (`Fan3Wire` or `Fan4Wire`).
-  - Control pins: `PIN_FAN1_CTRL` (required) and `PIN_FAN2_CTRL` (optional second fan, share duty). Set the secondary pin/channel to `-1` to disable.
-  - Tach inputs (`PIN_FAN1_TACH`, `PIN_FAN2_TACH`) are reserved for future RPM capture.
-  - PWM freq: 4-wire uses 25 kHz; 3-wire default 1 kHz (configurable). 3-wire applies a minimum start duty to avoid stall.
+  - `kFanType` (3-wire vs 4-wire) lives in `config.h`. Three-wire modes enforce a configurable minimum start duty.
+  - PWM frequency defaults to 25 kHz (4-wire) or 1 kHz (3-wire). Adjust `FAN_PWM_FREQ_*` if your fans prefer different carriers.
+  - Tach inputs are not sampled yet but the pads are broken out for future RPM capture using PCNT/RMT.
 - ADAU1701 control bus:
-  - Default I²C pins are `GPIO21 (SDA)` / `GPIO22 (SCL)` (`PIN_I2C_SDA`/`PIN_I2C_SCL` in `config.h`).
-  - `ADAU_I2C_ADDR` (0x34 by default) is used for live parameter writes; `ADAU_EEPROM_I2C_ADDR` (0x50) targets the external self-boot EEPROM.
-  - If you expose the ADAU reset pin, set `PIN_ADAU_RESET` so the firmware can pulse it after programming the EEPROM/self-boot cycle.
-- USB serial: tested with CH340 and CP2102 bridges; adjust `PORT=/dev/ttyUSBx` accordingly.
+  - `PIN_I2C_SDA`/`PIN_I2C_SCL` follow the table above and can be overridden if you relocate the bus.
+  - `ADAU_I2C_ADDR` (0x34) streams live parameters; `ADAU_EEPROM_I2C_ADDR` (0x50) programs the self-boot EEPROM.
+  - Hook `PIN_ADAU_RESET` to the codec reset net so bundle pushes can pulse the DSP automatically.
+- USB serial: CH340 (ESP32) shows up as `/dev/ttyUSB0`; the ESP32-S3 hardware CDC target usually enumerates as `/dev/ttyACM0`. Override `PORT` accordingly.
+
+## Target Definitions
+- Each board gets a `.def` manifest under `targets/`. Fields include the base FQBN, board menu overrides (flash size, PSRAM, USB mode), LittleFS/partition CSV path, flash size sanity check, and upload metadata (port, baud, optional VID/PID/serial for identity checks).
+- `tools/target-build.sh --target <name> [--flash]` reads the manifest, copies the matching partition CSV into the sketch before compiling, validates that the layout fills the advertised flash size, and optionally flashes via the recorded serial port. Running the script with no arguments opens an interactive menu that lets you pick/edit definitions, adjust ports/baud/strict checks, and trigger build/flash tasks.
+- Use `tools/target-build.sh --list` to see available targets, or `--def-file path/to/custom.def` to point at new hardware without touching the repo.
+- Identity enforcement is optional: leave `PORT_ID_*` blank in the `.def` file or pass `--skip-identity` to bypass the `udevadm` verification when pairing a board for the first time.
 
 ## Libraries
 - ESPAsyncWebServer, AsyncTCP, ArduinoJson, LittleFS, Preferences (Arduino core). Install via Boards Manager/Library Manager.

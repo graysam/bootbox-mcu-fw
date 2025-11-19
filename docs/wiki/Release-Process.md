@@ -8,6 +8,10 @@
 ```bash
 ARDUINO_CLI_CONFIG=./arduino-cli.yaml \
   ./tools/arduino-build.sh --build-path .arduino-build --fqbn esp32:esp32:esp32
+
+ARDUINO_CLI_CONFIG=./arduino-cli.yaml \
+  ./tools/arduino-build.sh --build-path .arduino-build-s3 \
+  --fqbn 'esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,USBMode=hwcdc,PartitionScheme=custom'
 ```
 
 ## Package Artifacts
@@ -17,12 +21,18 @@ mkdir -p dist
 cp .arduino-build/bootbox_mcu_fw.unified.bin dist/
 cp .arduino-build/bootbox_mcu_fw.spiffs.bin dist/
 cp .arduino-build/flash-manifest.json dist/
+cp .arduino-build-s3/bootbox_mcu_fw.unified.bin dist/bootbox_mcu_fw_s3.unified.bin
+cp .arduino-build-s3/bootbox_mcu_fw.spiffs.bin dist/bootbox_mcu_fw_s3.spiffs.bin
+cp .arduino-build-s3/flash-manifest.json dist/flash-manifest-s3.json
 
 cd dist
 zip bootbox-mcu-fw-0.1.0.zip \
   bootbox_mcu_fw.unified.bin \
   bootbox_mcu_fw.spiffs.bin \
-  flash-manifest.json
+  flash-manifest.json \
+  bootbox_mcu_fw_s3.unified.bin \
+  bootbox_mcu_fw_s3.spiffs.bin \
+  flash-manifest-s3.json
 cd ..
 ```
 Optional: add checksums (`sha256sum dist/*.zip > dist/bootbox-mcu-fw-0.1.0.sha256`).

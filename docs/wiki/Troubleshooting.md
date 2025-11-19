@@ -10,6 +10,7 @@
 | DSP bundle push fails (`ADAU link offline`) | I²C wiring or reset pin missing | Check SDA/SCL connections + pull-ups; define `PIN_ADAU_RESET` if the board exposes it; confirm ADAU board has power. |
 | DSP controls lag | Oversized schema or WS spam | Reduce control count, ensure browser tab stays focused during heavy slider drags, increase `DSP_SAVE_DELAY_MS` if needed. |
 | Reboots with `heap_caps_free` assert | LittleFS fragmentation or bundle upload been interrupted | Reformat LittleFS (erase flash or flash `bootloader + partitions`), avoid power cycles during uploads. |
+| Fans/thermistors dead after flashing ESP32-S3 | Sketch built with ESP32 pin map | Rebuild with `--fqbn esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,USBMode=hwcdc,PartitionScheme=custom`. `/api/state.sys.idf_target` should report `esp32s3`. |
 
 ## Serial Debug Tips
 - Use `tools/arduino-monitor.sh` to capture panic traces. For Guru Meditation logs, grab the backtrace addresses and feed them to `xtensa-esp32-elf-addr2line -pfiaC bootbox_mcu_fw.ino.elf`.

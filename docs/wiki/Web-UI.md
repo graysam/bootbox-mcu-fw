@@ -32,6 +32,7 @@ Every widget tracks pending vs applied values so you always know when the contro
 - **System**
   - `Get logs` fetches the ring buffer; enable auto-scroll before stress testing so new lines stay in view.
   - Thermistor sessions lock the channel until you hit **Solve** or **Cancel**, preventing cross-channel contamination.
+  - The telemetry summary (`/api/state.sys`) now lists `idf_target`, PSRAM totals, and LittleFS usage—verify ESP32-S3 builds report `idf_target=esp32s3` before shipping.
 
 ## Accessibility & Responsiveness
 - Cards collapse/expand individually; states persist in `localStorage` (`bootbox:cards`).
