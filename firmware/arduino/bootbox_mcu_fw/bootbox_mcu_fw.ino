@@ -696,7 +696,7 @@ static bool btLinkSendHello(const char* reason, JsonVariantConst reply_id) {
   doc["fw"] = "bootbox";
   doc["fw_version"] = FW_VERSION;
   doc["fw_build"] = FW_BUILD;
-  doc["link_proto"] = 1;
+  doc["link_proto"] = LINK_PROTO_VERSION;
   doc["reason"] = reason;
   doc["uart_baud"] = BT_LINK_BAUD;
   doc["bt_link_enabled"] = BT_LINK_ENABLED;

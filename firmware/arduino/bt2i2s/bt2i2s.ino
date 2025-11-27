@@ -166,6 +166,21 @@ static void init_link_bus() {
 }
 
 static void init_a2dp() {
+#if A2DP_LEGACY_I2S_SUPPORT
+  // Ensure the sink has a concrete output instance before we touch pin config.
+  // Some ESP-IDF/Arduino builds have been observed to leave the default
+  // output pointer unset, which would null-deref inside set_pin_config().
+  static BluetoothA2DPOutputDefault s_out_default;
+  if (!a2dp_sink.get_output()) {
+    Serial.println("[bt] A2DP output missing; rebinding default output");
+    a2dp_sink.set_output(s_out_default);
+  }
+  if (!a2dp_sink.get_output()) {
+    Serial.println("[bt] A2DP output unavailable; aborting init");
+    return;
+  }
+#endif
+
   i2s_pin_config_t pin_config = {
       .bck_io_num = PIN_I2S_BCLK,
       .ws_io_num = PIN_I2S_LRCLK,
@@ -193,9 +208,12 @@ static void init_a2dp() {
       .bits_per_chan = I2S_BITS_PER_CHAN_16BIT,
   };
 
-  a2dp_sink.set_i2s_port(I2S_PORT);
   a2dp_sink.set_pin_config(pin_config);
+#if A2DP_LEGACY_I2S_SUPPORT
+  // Legacy API does not require explicit port/config; use defaults after pin mapping.
+#else
   a2dp_sink.set_i2s_config(i2s_config);
+#endif
   if (BT_AUTO_RECONNECT) {
     a2dp_sink.set_auto_reconnect(true);
   }

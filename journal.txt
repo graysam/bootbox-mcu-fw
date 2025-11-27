@@ -482,3 +482,11 @@ Prompt: continue integration, share config, ensure link sync
   - Switched link timing/baud to reference the shared link config.
 - firmware/arduino/bt2i2s/config.h
   - Included the shared link config and reused its baud/heartbeat/proto settings; kept only board-specific pin selections.
+Prompt: continue integration after bt2i2s crash while booting; align link protocol across boards
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
+  - Sent link hello using shared LINK_PROTO_VERSION to keep Bootbox/bt2i2s handshake aligned.
+- firmware/arduino/bt2i2s/bt2i2s.ino
+  - Guarded A2DP sink output pointer and re-bound a default output before pin setup to avoid null deref on esp32 core builds using the legacy I2S API.
+- Builds/Uploads
+  - bt2i2s: `arduino-cli compile --fqbn esp32:esp32:esp32 --build-path .arduino-build-bt --export-binaries --libraries firmware/arduino/libraries firmware/arduino/bt2i2s`
+  - Uploaded to /dev/ttyUSB0 via `arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32 --input-dir .arduino-build-bt`; device now boots cleanly and emits hello/bt_state frames (no Guru panic).
