@@ -15,10 +15,11 @@
 | Thermistor 2 | GPIO35 (ADC1_7) | GPIO5 (ADC1_4) | Calibrate via the System tab UI to store β/nominal overrides. |
 | Fan 1 PWM | GPIO25 | GPIO16 | Drives MOSFET gate (3-wire) or PWM pin (4-wire). |
 | Fan 2 PWM | GPIO26 | GPIO17 | Optional mirror output; set to `-1` to disable. |
-| Tach inputs | GPIO27 | GPIO18 | Reserved for future RPM capture. |
-| Status LED | GPIO2 (active-low) | `LED_BUILTIN` (RGB helper) | S3 uses the onboard RGB via `digitalWrite`; set `STATUS_LED_PIN = -1` to disable. |
+| Tach inputs (4-wire) | GPIO27 | GPIO18 (fan1), GPIO7 (fan2 optional) | Tach sampling only in 4-wire mode; set pins to `-1` to disable. |
+| Status LED | GPIO2 (active-low) | `LED_BUILTIN` (RGB WS2812) | S3 onboard LED is WS2812 on GPIO48; current driver does not light it. |
 | I²C SDA/SCL | GPIO21 / GPIO22 | GPIO8 / GPIO9 | Add 2.2–4.7 kΩ pull-ups close to the MCU, especially with long harnesses. |
 | ADAU RESET | Configurable (default -1) | Configurable (default -1) | Tie to the ADAU reset net if you want automatic self-boot pulses. |
+| BT link UART | TX17 / RX16 | TX12 / RX13 | UART2 @ 921600 baud; crosses to bt2i2s. |
 
 ## ADAU1701 Notes
 - The ADAU EEPROM (e.g., 24LC256) must be wired to the same I²C bus the MCU uses. Confirm `ADAU_EEPROM_I2C_ADDR` (typically `0x50`).
@@ -33,6 +34,10 @@
 ## Enclosure / EMI
 - Keep the ESP32 antenna clear of large copper or nearby wiring harnesses; aim for a 5 mm clearance around the PCB antenna region.
 - If mounting near class-D amplifier modules, add a grounded shield or place the MCU in a separate compartment to reduce RF coupling into thermistor traces.
+
+## Not implemented / limitations
+- S3 onboard RGB LED (GPIO48) is not driven by the current StatusLed helper; use an external LED or add WS2812 support if needed.
+- ADAU reset is disabled by default (`PIN_ADAU_RESET = -1`); wire and enable if you require automatic self-boot toggling.
 
 ## TODO
 - Publish final harness drawings (JST pinouts, wire colors, in-line fuses).

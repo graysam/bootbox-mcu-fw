@@ -8,6 +8,7 @@
   - `arduino-upload.sh` — flashes the sketch + FS image over USB (honors `PORT`, `BAUD`, `--fqbn`, `--no-build`).
   - `arduino-monitor.sh` — opens a miniterm-style serial console.
 - Set `ARDUINO_CLI_CONFIG=./arduino-cli.yaml` so every machine uses the repo-local cache paths instead of `$HOME/.arduino15`.
+- For bt2i2s builds, include the vendored library path: `--libraries firmware/arduino/libraries`.
 
 ## Clean Build
 ```bash
@@ -31,6 +32,14 @@ ARDUINO_CLI_CONFIG=./arduino-cli.yaml \
 ```
 
 The helper reads `sdkconfig` to tag `flash-manifest.json` with the correct chip so downstream tools automatically switch to `--chip esp32s3`.
+
+bt2i2s (ESP32 WROOM) compile:
+```bash
+arduino-cli compile --config-file arduino-cli.yaml \
+  --fqbn esp32:esp32:esp32 \
+  --libraries firmware/arduino/libraries \
+  firmware/arduino/bt2i2s
+```
 
 ## Target Definitions & Helper Script
 - Reusable manifests live under `targets/*.def`. They define the base FQBN, board menu overrides, flash size, upload port/baud, and optional VID/PID/serial hints so the helper can confirm you plugged in the right board.

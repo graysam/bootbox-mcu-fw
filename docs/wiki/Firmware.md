@@ -7,6 +7,8 @@ The Arduino sketch (`firmware/arduino/bootbox_mcu_fw`) runs the entire controlle
 - Drives thermal control (dual-channel thermistors, PID/manual fan loop).
 - Manages DSP bundles, presets, and ADAU1701 I²C traffic.
 - Persists operator settings, calibration data, and DSP values using Preferences (NVS).
+- Talks to the bt2i2s board over a UART JSON link (shared config in `firmware/arduino/common/link_config.h`).
+- Counts fan tach pulses (4-wire mode) to expose per-fan RPMs in the UI/API.
 
 ## Architecture Highlights
 | Module | Responsibility |
@@ -15,10 +17,11 @@ The Arduino sketch (`firmware/arduino/bootbox_mcu_fw`) runs the entire controlle
 | `bootbox_mcu_fw.ino` | Main loop, state struct, PID/fan control, ADAU manager, REST/WS handlers, status LED scheduler. |
 | `settings.h` | Structures + helpers for loading/saving setpoints, PID gains, manual fan %, and thermistor calibration parameters. |
 | `/data/` | Web assets that get packed into LittleFS each build. |
+| `../common/link_config.h` | Shared UART link baud/heartbeat/proto definitions used by both Bootbox and bt2i2s. |
 
 ### Runtime Flow
 1. `setup()` initializes LittleFS, Preferences, Wi-Fi AP, Wire/I²C, LEDs, and Async services.
-2. A 1 Hz task polls sensors (thermistors, fan RPM placeholder), runs the PID controller, and updates PWM outputs.
+2. A 1 Hz task polls sensors (thermistors, fan RPM in 4-wire mode), runs the PID controller, and updates PWM outputs.
 3. WebSocket messages (`set_mode`, `set_manual_pct`, `set_therm`, `set_dsp`, etc.) tweak the in-memory state and mark dirty flags so NVS flushes after a debounce window.
 4. DSP control values persist independently; once `dsp_values_dirty` is set, they flush after `DSP_SAVE_DELAY_MS` to avoid NAND thrash.
 5. Status LED patterns run from a lightweight scheduler so no blocking `delay()` usage is required for fault codes.
@@ -41,3 +44,8 @@ The Arduino sketch (`firmware/arduino/bootbox_mcu_fw`) runs the entire controlle
 - Watch heap usage via `/api/state.sys.free_heap`; enabling lots of DSP controls increases JSON document sizes—bump `StaticJsonDocument` capacities accordingly.
 - For new status LED patterns, edit the `StatusCode` enum + `applyStatusPattern()` helper so they remain centralized.
 - `/api/state.sys` exposes `idf_target`, PSRAM totals, and filesystem usage to confirm whether an ESP32 or ESP32-S3 image is running.
+
+## Not implemented / limitations
+- S3 onboard WS2812 RGB LED (GPIO48) is not driven by StatusLed; wire an external LED or add WS2812 support if needed.
+- ADAU reset pin is disabled by default (`PIN_ADAU_RESET = -1`); self-boot pulses require wiring and enabling the pin.
+- Track position telemetry from AVRCP is not surfaced in WebSocket/API.

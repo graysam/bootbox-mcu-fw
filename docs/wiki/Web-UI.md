@@ -20,6 +20,7 @@ Every widget tracks pending vs applied values so you always know when the contro
 - System tab:
   - Thermistor calibration card orchestrates `/api/therm/calibration` calls (start → capture → solve) and lists stored coefficients.
   - Metrics grid shows uptime, heap, CPU clock, LittleFS usage, firmware build, and connected WebSocket clients.
+  - Bluetooth card mirrors bt2i2s state (online flags, metadata, volume) and now lists paired devices with priority reorder, connect/forget, and pairing start/stop. RPMs display only when `kFanType` is 4-wire.
 
 ## Tab Tips
 - **Cooling**

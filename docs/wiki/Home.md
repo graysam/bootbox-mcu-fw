@@ -7,6 +7,9 @@ Welcome to the project knowledge base. Everything you need to build, flash, conf
 - [[Firmware]] — architectural overview, subsystems, and compile-time switches.
 - [[Web-UI]] — tab-by-tab behavior, WebSocket contract, and UX guidelines.
 - [[DSP-Control]] — bundle format, interface schema, I²C transport details.
+- [[bt2i2s]] — Bluetooth bridge firmware, wiring, and I2S/AVRCP specifics.
+- [[Link-Protocol]] — Bootbox↔bt2i2s UART protocol, frame formats, and compatibility rules.
+- [[Debugging]] — serial logs, debug flags, file formats, and diagnostics.
 - [[Build-and-Flash]] — toolchain setup and flashing workflows.
 - [[Release-Process]] — tagging, packaging, and publishing artifacts.
 - [[Troubleshooting]] — quick fixes for common faults.
