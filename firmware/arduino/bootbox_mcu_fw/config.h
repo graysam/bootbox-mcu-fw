@@ -29,13 +29,14 @@ static constexpr int PIN_FAN1_CTRL = 25;
 static constexpr int PIN_FAN2_CTRL = 26; // set to -1 to disable second fan
 #endif
 
-// Tachometer inputs (future use)
+// Tachometer inputs (used when kFanType == Fan4Wire). Set to -1 to disable.
 #if defined(BOOTBOX_TARGET_ESP32S3)
 static constexpr int PIN_FAN1_TACH = 18;
+static constexpr int PIN_FAN2_TACH = 7;  // spare GPIO on DevKitC-1; set -1 to disable
 #else
 static constexpr int PIN_FAN1_TACH = 27;
-#endif
 static constexpr int PIN_FAN2_TACH = -1;
+#endif
 
 // PWM channels
 static constexpr int FAN1_PWM_CHANNEL = 0;     // LEDC channel index 0..15
@@ -112,3 +113,20 @@ static constexpr size_t ADAU_EEPROM_SIZE_BYTES = 32768;
 
 static constexpr int PIN_ADAU_RESET = -1; // set to GPIO if reset is controllable
 static constexpr bool ADAU_RESET_ACTIVE_LOW = true;
+
+// -------- Bluetooth link to bt2i2s --------
+// Enable if a dedicated UART is wired to the bt2i2s board.
+static constexpr bool BT_LINK_ENABLED = true;
+// Default pins target the ESP32 DevKitC (WROOM) harness: TX=17, RX=16.
+// On ESP32-S3 DevKitC, choose alternate pins that do not conflict with fans (e.g., TX=12, RX=13).
+#if defined(BOOTBOX_TARGET_ESP32S3)
+static constexpr int PIN_BT_LINK_TX = 12;
+static constexpr int PIN_BT_LINK_RX = 13;
+#else
+static constexpr int PIN_BT_LINK_TX = 17;
+static constexpr int PIN_BT_LINK_RX = 16;
+#endif
+static constexpr int BT_LINK_UART_NUM = 2; // Serial2
+static constexpr uint32_t BT_LINK_BAUD = 921600;
+static constexpr uint32_t BT_LINK_HEARTBEAT_MS = 1000;
+static constexpr uint32_t BT_LINK_TIMEOUT_MS = 3500;

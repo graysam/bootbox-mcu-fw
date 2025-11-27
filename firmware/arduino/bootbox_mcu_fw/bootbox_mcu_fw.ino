@@ -35,6 +35,8 @@ struct RuntimeState {
   float temp2 = NAN;
   uint16_t fan_rpm = 0;         // combined/representative RPM
   uint8_t fan_target_pct = 0;   // 0-100
+  uint16_t fan1_rpm = 0;
+  uint16_t fan2_rpm = 0;
 };
 
 RuntimeState state;
@@ -55,6 +57,60 @@ static uint32_t settings_dirty_since = 0;
 static constexpr uint32_t SETTINGS_SAVE_DELAY_MS = 1500;
 static bool littlefs_ready = false;
 static esp_reset_reason_t last_reset_reason = ESP_RST_UNKNOWN;
+
+// ---- Bluetooth link to bt2i2s ----
+static constexpr size_t BT_LINK_RX_CAP = 1024;
+static constexpr size_t BT_LINK_TX_CAP = 1280;
+static constexpr const char* BT_LINK_FW_NAME = "bt2i2s";
+
+struct BtDeviceInfo {
+  String addr;
+  String name;
+  int priority = 0;
+  bool connected = false;
+  uint32_t last_seen_ms = 0;
+};
+
+struct BtPairingInfo {
+  bool active = false;
+  uint32_t remaining_ms = 0;
+};
+
+struct BtLinkState {
+  bool online = false;
+  bool hello_seen = false;
+  bool connected = false;
+  bool avrcp = false;
+  bool audio_active = false;
+  bool playing = false;
+  uint8_t volume_pct = 0;
+  uint16_t sample_rate_hz = 44100;
+  String title;
+  String artist;
+  String album;
+  String fw;
+  String fw_version;
+  String fw_build;
+  String bt_name;
+  String peer_addr;
+  String peer_name;
+  uint8_t proto = 0;
+  uint32_t last_seen_age_ms = 0;
+  uint32_t last_seen_ms = 0;
+  uint32_t last_hello_ms = 0;
+  std::vector<BtDeviceInfo> devices;
+  BtPairingInfo pairing;
+  bool pairing_supported = false;
+};
+
+static BtLinkState bt_link_state;
+static HardwareSerial* bt_link_serial = nullptr;
+static bool bt_link_ready = false;
+static uint32_t bt_last_hello_sent_ms = 0;
+static uint32_t bt_last_state_req_ms = 0;
+static uint32_t bt_cmd_counter = 1;
+static uint32_t bt_link_last_broadcast_ms = 0;
+static uint32_t bt_last_devices_req_ms = 0;
 
 // ---- DSP manager data ----
 static const char DSP_DIR[] = "/dsp";
@@ -98,6 +154,9 @@ static bool dsp_values_dirty = false;
 static uint32_t dsp_values_dirty_since = 0;
 static bool adau_ready = false;
 static String adau_last_error;
+static volatile uint32_t fan_tach_counts[FAN_SLOT_COUNT] = {0};
+static uint32_t fan_tach_prev[FAN_SLOT_COUNT] = {0};
+static uint32_t fan_tach_last_ms = 0;
 
 struct DspPresetInfo {
   String name;
@@ -131,6 +190,48 @@ static inline bool fanSlotEnabled(size_t idx) {
   return idx < FAN_SLOT_COUNT && FAN_CTRL_PINS[idx] >= 0 && FAN_PWM_CHANNELS[idx] >= 0;
 }
 
+static inline bool fanTachEnabled(size_t idx) {
+  if (kFanType != FanType::Fan4Wire) return false;
+  if (idx == 0) return PIN_FAN1_TACH >= 0;
+  if (idx == 1) return PIN_FAN2_TACH >= 0;
+  return false;
+}
+
+static void IRAM_ATTR tachIsrFan1();
+static void IRAM_ATTR tachIsrFan2();
+
+static void tachInit() {
+  for (size_t i = 0; i < FAN_SLOT_COUNT; ++i) {
+    fan_tach_counts[i] = 0;
+    fan_tach_prev[i] = 0;
+  }
+  fan_tach_last_ms = millis();
+  if (kFanType != FanType::Fan4Wire) return;
+  if (PIN_FAN1_TACH >= 0) {
+    pinMode(PIN_FAN1_TACH, INPUT_PULLUP);
+    attachInterrupt(PIN_FAN1_TACH, tachIsrFan1, FALLING);
+  }
+  if (PIN_FAN2_TACH >= 0) {
+    pinMode(PIN_FAN2_TACH, INPUT_PULLUP);
+    attachInterrupt(PIN_FAN2_TACH, tachIsrFan2, FALLING);
+  }
+}
+
+static void IRAM_ATTR tachIsrFan1() {
+  fan_tach_counts[0]++;
+}
+
+static void IRAM_ATTR tachIsrFan2() {
+  fan_tach_counts[1]++;
+}
+
+static uint16_t rpmFromPulses(uint32_t pulses, uint32_t interval_ms) {
+  if (pulses == 0 || interval_ms == 0) return 0;
+  static constexpr uint32_t PULSES_PER_REV = 2; // common PC fan tach
+  uint32_t rpm = (pulses * 60000UL) / (interval_ms * PULSES_PER_REV);
+  return static_cast<uint16_t>(rpm);
+}
+
 static uint8_t activeFanCount() {
   uint8_t count = 0;
   for (size_t i = 0; i < FAN_SLOT_COUNT; ++i) {
@@ -155,6 +256,30 @@ static const char* resetReasonToStr(esp_reset_reason_t reason);
 static void populateDspState(JsonObject obj);
 static void refreshThermistorParams();
 static AsyncJsonResponse* createThermStatusResponse(bool ok, const String& message, int statusCode = 200);
+static void tachInit();
+static void sampleFanTach();
+static uint16_t rpmFromPulses(uint32_t pulses, uint32_t interval_ms);
+static void IRAM_ATTR tachIsrFan1();
+static void IRAM_ATTR tachIsrFan2();
+static void btLinkInit();
+static void btLinkTick();
+static void btLinkHandleLine(const String& line);
+static void btLinkHandleDevices(const JsonDocument& doc);
+static bool btLinkSendHello(const char* reason, JsonVariantConst reply_id = JsonVariantConst());
+static bool btLinkSendStateRequest(JsonVariantConst reply_id = JsonVariantConst());
+static bool btLinkSendCmd(const char* cmd, JsonVariantConst reply_id = JsonVariantConst(), int volume_pct = -1);
+static bool btLinkSendCmdWithAddr(const char* cmd, const char* addr, JsonVariantConst reply_id = JsonVariantConst());
+static bool btLinkSendPriority(const JsonArrayConst& order, JsonVariantConst reply_id = JsonVariantConst());
+static void btLinkBroadcast();
+static void btLinkBroadcastWs();
+static void btLinkBroadcastDevices();
+static bool btLinkSendDoc(const JsonDocument& doc, bool log);
+static void btLinkAttachId(JsonDocument& doc, JsonVariantConst id);
+static void tachInit();
+static void IRAM_ATTR tachIsrFan1();
+static void IRAM_ATTR tachIsrFan2();
+static void sampleFanTach();
+static uint16_t rpmFromPulses(uint32_t pulses, uint32_t interval_ms);
 
 struct ThermCalSession {
   bool active = false;
@@ -330,6 +455,353 @@ static void addLog(const String& s) {
   logs.push_back(s);
 }
 
+// ---- bt2i2s link (UART JSON lines) ----
+static void btLinkInit() {
+  if (!BT_LINK_ENABLED) {
+    Serial.println("[bt-link] disabled");
+    return;
+  }
+  if (PIN_BT_LINK_TX < 0 || PIN_BT_LINK_RX < 0) {
+    Serial.println("[bt-link] pins set to -1, skipping UART init");
+    return;
+  }
+  if (BT_LINK_UART_NUM == 1) {
+    bt_link_serial = &Serial1;
+  } else {
+    bt_link_serial = &Serial2;
+  }
+  bt_link_serial->begin(BT_LINK_BAUD, SERIAL_8N1, PIN_BT_LINK_RX, PIN_BT_LINK_TX);
+  bt_link_serial->setTimeout(5);
+  bt_link_ready = true;
+  addLog(String("[bt-link] UART ready TX=") + PIN_BT_LINK_TX + " RX=" + PIN_BT_LINK_RX + " @" + BT_LINK_BAUD);
+  btLinkSendHello("boot");
+}
+
+static void btLinkHandleHello(const JsonDocument& doc, const char* reason) {
+  bt_link_state.hello_seen = true;
+  if (doc.containsKey("fw")) bt_link_state.fw = String(doc["fw"].as<const char*>());
+  if (doc.containsKey("fw_version")) {
+    bt_link_state.fw_version = String(doc["fw_version"].as<const char*>());
+  } else if (doc.containsKey("fw")) {
+    bt_link_state.fw_version = String(doc["fw"].as<const char*>());
+  }
+  if (doc.containsKey("fw_build")) bt_link_state.fw_build = String(doc["fw_build"].as<const char*>());
+  if (doc.containsKey("bt_name")) bt_link_state.bt_name = String(doc["bt_name"].as<const char*>());
+  if (doc.containsKey("link_proto")) bt_link_state.proto = doc["link_proto"].as<uint8_t>();
+  bt_link_state.pairing_supported = doc["pairing_supported"] | (bt_link_state.proto >= 2);
+  bt_link_state.last_seen_ms = millis();
+  bt_link_state.last_hello_ms = bt_link_state.last_seen_ms;
+  bt_link_state.online = true;
+  bt_link_state.last_seen_age_ms = 0;
+  addLog(String("[bt-link] hello (") + reason + ")");
+  btLinkBroadcast();
+}
+
+static void btLinkHandleBtState(const JsonDocument& doc) {
+  bt_link_state.online = true;
+  bt_link_state.last_seen_ms = millis();
+  bt_link_state.last_seen_age_ms = 0;
+  if (doc.containsKey("connected")) bt_link_state.connected = doc["connected"].as<bool>();
+  if (doc.containsKey("avrcp")) bt_link_state.avrcp = doc["avrcp"].as<bool>();
+  if (doc.containsKey("audio_active")) bt_link_state.audio_active = doc["audio_active"].as<bool>();
+  if (doc.containsKey("playing")) bt_link_state.playing = doc["playing"].as<bool>();
+  if (doc.containsKey("volume_pct")) bt_link_state.volume_pct = doc["volume_pct"].as<uint8_t>();
+  if (doc.containsKey("sample_rate_hz")) bt_link_state.sample_rate_hz = doc["sample_rate_hz"].as<uint16_t>();
+  if (doc.containsKey("title")) bt_link_state.title = String(doc["title"].as<const char*>());
+  if (doc.containsKey("artist")) bt_link_state.artist = String(doc["artist"].as<const char*>());
+  if (doc.containsKey("album")) bt_link_state.album = String(doc["album"].as<const char*>());
+  if (doc.containsKey("peer_addr")) bt_link_state.peer_addr = String(doc["peer_addr"].as<const char*>());
+  if (doc.containsKey("peer_name")) bt_link_state.peer_name = String(doc["peer_name"].as<const char*>());
+  if (doc.containsKey("fw_version")) bt_link_state.fw_version = String(doc["fw_version"].as<const char*>());
+  if (doc.containsKey("pairing_supported")) bt_link_state.pairing_supported = doc["pairing_supported"].as<bool>();
+  if (doc["pairing"].is<JsonObject>()) {
+    JsonObjectConst pairing = doc["pairing"].as<JsonObjectConst>();
+    bt_link_state.pairing.active = pairing["active"] | false;
+    bt_link_state.pairing.remaining_ms = pairing["remaining_ms"] | 0;
+  }
+  const char* reason = doc["reason"] | "";
+  if (strlen(reason)) {
+    addLog(String("[bt-link] state: ") + reason);
+  }
+  btLinkBroadcast();
+}
+
+static void btLinkHandleDevices(const JsonDocument& doc) {
+  bt_link_state.online = true;
+  bt_link_state.last_seen_ms = millis();
+  bt_link_state.last_seen_age_ms = 0;
+  bt_link_state.devices.clear();
+  if (doc.containsKey("devices") && doc["devices"].is<JsonArray>()) {
+    for (JsonObjectConst obj : doc["devices"].as<JsonArrayConst>()) {
+      BtDeviceInfo d;
+      d.addr = obj["addr"] | "";
+      d.name = obj["name"] | "";
+      d.priority = obj["priority"] | 0;
+      d.connected = obj["connected"] | false;
+      d.last_seen_ms = obj["last_seen_ms"] | 0;
+      if (d.addr.length()) bt_link_state.devices.push_back(d);
+    }
+  }
+  if (doc["pairing"].is<JsonObject>()) {
+    JsonObjectConst pairing = doc["pairing"].as<JsonObjectConst>();
+    bt_link_state.pairing.active = pairing["active"] | false;
+    bt_link_state.pairing.remaining_ms = pairing["remaining_ms"] | 0;
+  }
+  if (doc.containsKey("pairing_supported")) {
+    bt_link_state.pairing_supported = doc["pairing_supported"].as<bool>();
+  }
+  btLinkBroadcastDevices();
+}
+
+static void btLinkHandleLine(const String& line) {
+  StaticJsonDocument<BT_LINK_RX_CAP> doc;
+  DeserializationError err = deserializeJson(doc, line);
+  if (err) {
+    addLog(String("[bt-link] bad json: ") + err.c_str());
+    return;
+  }
+  const char* type = doc["type"] | "";
+  const char* reason = doc["reason"] | "";
+  if (strcmp(type, "hello") == 0) {
+    btLinkHandleHello(doc, reason);
+    return;
+  }
+  if (strcmp(type, "bt_state") == 0) {
+    btLinkHandleBtState(doc);
+    return;
+  }
+  if (strcmp(type, "bt_devices") == 0) {
+    btLinkHandleDevices(doc);
+    return;
+  }
+  if (strcmp(type, "ack") == 0) {
+    addLog(String("[bt-link] ack ") + (doc["cmd"].is<const char*>() ? doc["cmd"].as<const char*>() : ""));
+    return;
+  }
+  if (strcmp(type, "error") == 0) {
+    addLog(String("[bt-link] error: ") + (doc["reason"].is<const char*>() ? doc["reason"].as<const char*>() : "unknown"));
+    return;
+  }
+  addLog(String("[bt-link] unknown type: ") + type);
+}
+
+static void btLinkTick() {
+  if (!bt_link_ready) return;
+  while (bt_link_serial->available()) {
+    String line = bt_link_serial->readStringUntil('\n');
+    line.trim();
+    if (line.isEmpty()) continue;
+    btLinkHandleLine(line);
+  }
+
+  const uint32_t now = millis();
+  if (bt_link_state.last_seen_ms > 0 && now >= bt_link_state.last_seen_ms) {
+    bt_link_state.last_seen_age_ms = now - bt_link_state.last_seen_ms;
+  }
+  if (bt_link_state.online && now - bt_link_state.last_seen_ms > BT_LINK_TIMEOUT_MS) {
+    bt_link_state.online = false;
+    bt_link_state.connected = false;
+    bt_link_state.audio_active = false;
+    bt_link_state.playing = false;
+    bt_link_state.hello_seen = false;
+    bt_link_state.volume_pct = 0;
+    bt_link_state.sample_rate_hz = 0;
+    bt_link_state.title = "";
+    bt_link_state.artist = "";
+    bt_link_state.album = "";
+    bt_link_state.peer_addr = "";
+    bt_link_state.peer_name = "";
+    bt_link_state.last_seen_ms = 0;
+    bt_link_state.last_seen_age_ms = 0;
+    bt_link_state.pairing = BtPairingInfo{};
+    for (auto& d : bt_link_state.devices) {
+      d.connected = false;
+    }
+    addLog("[bt-link] timeout");
+    btLinkBroadcast();
+  }
+
+  if (!bt_link_state.online && now - bt_last_hello_sent_ms >= BT_LINK_HEARTBEAT_MS) {
+    btLinkSendHello("poll");
+  } else if (bt_link_state.online && now - bt_link_state.last_seen_ms >= BT_LINK_HEARTBEAT_MS * 3) {
+    btLinkSendStateRequest();
+  }
+  if (bt_link_state.online && bt_link_state.proto >= 2 &&
+      bt_link_state.devices.empty() &&
+      now - bt_last_devices_req_ms > BT_LINK_HEARTBEAT_MS * 2) {
+    StaticJsonDocument<192> doc;
+    doc["type"] = "get";
+    doc["what"] = "devices";
+    doc["id"] = bt_cmd_counter++;
+    bt_last_devices_req_ms = now;
+    btLinkSendDoc(doc, false);
+  }
+}
+
+static bool btLinkSendDoc(const JsonDocument& doc, bool log) {
+  if (!bt_link_ready || !bt_link_serial) {
+    addLog("[bt-link] tx skipped: uart not ready");
+    return false;
+  }
+  serializeJson(doc, *bt_link_serial);
+  bt_link_serial->println();
+  if (log) {
+    Serial.print("[bt-link tx] ");
+    serializeJson(doc, Serial);
+    Serial.println();
+  }
+  return true;
+}
+
+static void btLinkAttachId(JsonDocument& doc, JsonVariantConst id) {
+  if (!id.isNull()) {
+    doc["id"] = id;
+  }
+}
+
+static bool btLinkSendHello(const char* reason, JsonVariantConst reply_id) {
+  if (!bt_link_ready) return false;
+  StaticJsonDocument<BT_LINK_TX_CAP> doc;
+  doc["type"] = "hello";
+  doc["fw"] = "bootbox";
+  doc["fw_version"] = FW_VERSION;
+  doc["fw_build"] = FW_BUILD;
+  doc["link_proto"] = 1;
+  doc["reason"] = reason;
+  doc["uart_baud"] = BT_LINK_BAUD;
+  doc["bt_link_enabled"] = BT_LINK_ENABLED;
+  btLinkAttachId(doc, reply_id);
+  bt_last_hello_sent_ms = millis();
+  return btLinkSendDoc(doc, true);
+}
+
+static bool btLinkSendStateRequest(JsonVariantConst reply_id) {
+  StaticJsonDocument<192> doc;
+  doc["type"] = "get";
+  doc["what"] = "state";
+  doc["id"] = bt_cmd_counter++;
+  btLinkAttachId(doc, reply_id);
+  bt_last_state_req_ms = millis();
+  return btLinkSendDoc(doc, false);
+}
+
+static bool btLinkSendCmd(const char* cmd, JsonVariantConst reply_id, int volume_pct) {
+  StaticJsonDocument<192> doc;
+  doc["type"] = "cmd";
+  doc["cmd"] = cmd;
+  doc["id"] = bt_cmd_counter++;
+  if (volume_pct >= 0) {
+    doc["pct"] = volume_pct;
+  }
+  btLinkAttachId(doc, reply_id);
+  return btLinkSendDoc(doc, true);
+}
+
+static bool btLinkSendCmdWithAddr(const char* cmd, const char* addr, JsonVariantConst reply_id) {
+  if (!addr || strlen(addr) == 0) return false;
+  StaticJsonDocument<256> doc;
+  doc["type"] = "cmd";
+  doc["cmd"] = cmd;
+  doc["addr"] = addr;
+  doc["id"] = bt_cmd_counter++;
+  btLinkAttachId(doc, reply_id);
+  return btLinkSendDoc(doc, true);
+}
+
+static bool btLinkSendPriority(const JsonArrayConst& order, JsonVariantConst reply_id) {
+  StaticJsonDocument<384> doc;
+  doc["type"] = "cmd";
+  doc["cmd"] = "priority";
+  doc["id"] = bt_cmd_counter++;
+  JsonArray out = doc.createNestedArray("order");
+  for (JsonVariantConst v : order) {
+    out.add(v.as<const char*>());
+  }
+  btLinkAttachId(doc, reply_id);
+  return btLinkSendDoc(doc, true);
+}
+
+static void btLinkPopulateState(JsonObject obj, bool include_devices = false) {
+  obj["online"] = bt_link_state.online;
+  obj["hello_seen"] = bt_link_state.hello_seen;
+  obj["connected"] = bt_link_state.connected;
+  obj["avrcp"] = bt_link_state.avrcp;
+  obj["audio_active"] = bt_link_state.audio_active;
+  obj["playing"] = bt_link_state.playing;
+  obj["volume_pct"] = bt_link_state.volume_pct;
+  obj["sample_rate_hz"] = bt_link_state.sample_rate_hz;
+  obj["last_seen_ms"] = bt_link_state.last_seen_ms;
+  obj["last_seen_age_ms"] = bt_link_state.last_seen_age_ms;
+  if (bt_link_state.peer_addr.length()) obj["peer_addr"] = bt_link_state.peer_addr;
+  if (bt_link_state.peer_name.length()) obj["peer_name"] = bt_link_state.peer_name;
+  if (bt_link_state.title.length()) obj["title"] = bt_link_state.title;
+  if (bt_link_state.artist.length()) obj["artist"] = bt_link_state.artist;
+  if (bt_link_state.album.length()) obj["album"] = bt_link_state.album;
+  if (bt_link_state.fw.length()) obj["fw"] = bt_link_state.fw;
+  if (bt_link_state.fw_version.length()) obj["fw_version"] = bt_link_state.fw_version;
+  if (bt_link_state.fw_build.length()) obj["fw_build"] = bt_link_state.fw_build;
+  if (bt_link_state.bt_name.length()) obj["bt_name"] = bt_link_state.bt_name;
+  obj["link_proto"] = bt_link_state.proto;
+  auto pairing = obj.createNestedObject("pairing");
+  pairing["active"] = bt_link_state.pairing.active;
+  pairing["remaining_ms"] = bt_link_state.pairing.remaining_ms;
+  pairing["supported"] = bt_link_state.pairing_supported;
+  if (include_devices) {
+    auto devices = obj.createNestedArray("devices");
+    for (const auto& d : bt_link_state.devices) {
+      JsonObject entry = devices.createNestedObject();
+      entry["addr"] = d.addr;
+      if (d.name.length()) entry["name"] = d.name;
+      entry["priority"] = d.priority;
+      entry["connected"] = d.connected;
+      entry["last_seen_ms"] = d.last_seen_ms;
+    }
+  }
+}
+
+static void btLinkBroadcastWs() {
+  StaticJsonDocument<BT_LINK_TX_CAP> doc;
+  doc["type"] = "bt_state";
+  auto data = doc.createNestedObject("data");
+  btLinkPopulateState(data);
+  String out;
+  serializeJson(doc, out);
+  ws.textAll(out);
+}
+
+static void btLinkBroadcastDevices() {
+  StaticJsonDocument<BT_LINK_TX_CAP> doc;
+  doc["type"] = "bt_devices";
+  auto data = doc.createNestedObject("data");
+  auto arr = data.createNestedArray("devices");
+  for (const auto& d : bt_link_state.devices) {
+    JsonObject obj = arr.createNestedObject();
+    obj["addr"] = d.addr;
+    if (d.name.length()) obj["name"] = d.name;
+    obj["priority"] = d.priority;
+    obj["connected"] = d.connected;
+    obj["last_seen_ms"] = d.last_seen_ms;
+  }
+  auto pairing = data.createNestedObject("pairing");
+  pairing["active"] = bt_link_state.pairing.active;
+  pairing["remaining_ms"] = bt_link_state.pairing.remaining_ms;
+  data["pairing_supported"] = bt_link_state.pairing_supported;
+  String out;
+  serializeJson(doc, out);
+  ws.textAll(out);
+}
+
+static void btLinkBroadcast() {
+  // Debounce rapid bursts to avoid spamming the WS/UI.
+  const uint32_t now = millis();
+  if (now - bt_link_last_broadcast_ms < 50) {
+    bt_link_last_broadcast_ms = now;
+    return;
+  }
+  bt_link_last_broadcast_ms = now;
+  btLinkBroadcastWs();
+}
+
 static void wsSendReliable(AsyncWebSocketClient* c, JsonDocument& doc) {
   if (!c) return;
   doc["id"] = msg_seq++;
@@ -339,7 +811,7 @@ static void wsSendReliable(AsyncWebSocketClient* c, JsonDocument& doc) {
 }
 
 static void wsBroadcastState() {
-  StaticJsonDocument<1280> doc;
+  StaticJsonDocument<1792> doc;
   doc["type"] = "state";
   auto data = doc.createNestedObject("data");
   if (isnan(state.temp1)) {
@@ -352,7 +824,15 @@ static void wsBroadcastState() {
   } else {
     data["temp2"] = state.temp2;
   }
-  data["fan_rpm"] = state.fan_rpm;
+  if (kFanType == FanType::Fan4Wire) {
+    data["fan_rpm"] = state.fan_rpm;
+    data["fan1_rpm"] = state.fan1_rpm;
+    data["fan2_rpm"] = state.fan2_rpm;
+  } else {
+    data["fan_rpm"] = nullptr;
+    data["fan1_rpm"] = nullptr;
+    data["fan2_rpm"] = nullptr;
+  }
   data["fan_target_pct"] = state.fan_target_pct;
   data["fan_count"] = activeFanCount();
   data["pid_enabled"] = settings.pid_enabled;
@@ -367,6 +847,8 @@ static void wsBroadcastState() {
 
   auto sys = doc.createNestedObject("sys");
   fillSystemInfo(sys);
+  auto bt = doc.createNestedObject("bt");
+  btLinkPopulateState(bt);
 
   String out;
   serializeJson(doc, out);
@@ -424,6 +906,80 @@ static void onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
       return;
     }
 
+    if (strcmp(mtype, "bt_cmd") == 0) {
+      JsonObject data = doc["data"];
+      const char* cmd = doc["cmd"] | (data.isNull() ? nullptr : data["cmd"] | nullptr);
+      int pct = -1;
+      if (doc.containsKey("pct")) pct = doc["pct"].as<int>();
+      if (data.containsKey("pct")) pct = data["pct"].as<int>();
+      const char* addr = doc["addr"] | (data.isNull() ? nullptr : data["addr"] | nullptr);
+      JsonArrayConst order = (data.containsKey("order") && data["order"].is<JsonArray>()) ? data["order"].as<JsonArrayConst>() : JsonArrayConst();
+      uint32_t timeout_ms = data["timeout_ms"] | doc["timeout_ms"] | 0;
+      if (!cmd || strlen(cmd) == 0) {
+        StaticJsonDocument<160> errDoc;
+        errDoc["type"] = "error";
+        errDoc["error"] = "bt_cmd_missing";
+        String out; serializeJson(errDoc, out);
+        client->text(out);
+        return;
+      }
+      if (!bt_link_ready) {
+        StaticJsonDocument<160> errDoc;
+        errDoc["type"] = "error";
+        errDoc["error"] = "bt_link_unavailable";
+        String out; serializeJson(errDoc, out);
+        client->text(out);
+        return;
+      }
+      bool sent = false;
+      if (strcmp(cmd, "priority") == 0) {
+        if (order.isNull()) {
+          StaticJsonDocument<160> errDoc;
+          errDoc["type"] = "error";
+          errDoc["error"] = "bt_order_missing";
+          String out; serializeJson(errDoc, out);
+          client->text(out);
+          return;
+        }
+        sent = btLinkSendPriority(order, JsonVariantConst());
+      } else if (strcmp(cmd, "connect") == 0 || strcmp(cmd, "forget") == 0) {
+        if (!addr || strlen(addr) == 0) {
+          StaticJsonDocument<160> errDoc;
+          errDoc["type"] = "error";
+          errDoc["error"] = "bt_addr_missing";
+          String out; serializeJson(errDoc, out);
+          client->text(out);
+          return;
+        }
+        sent = btLinkSendCmdWithAddr(cmd, addr, JsonVariantConst());
+      } else if (strcmp(cmd, "pair_start") == 0) {
+        StaticJsonDocument<256> tx;
+        tx["type"] = "cmd";
+        tx["cmd"] = "pair_start";
+        tx["id"] = bt_cmd_counter++;
+        if (timeout_ms > 0) tx["timeout_ms"] = timeout_ms;
+        sent = btLinkSendDoc(tx, true);
+      } else if (strcmp(cmd, "pair_stop") == 0 || strcmp(cmd, "pair_cancel") == 0) {
+        sent = btLinkSendCmd("pair_stop", JsonVariantConst(), -1);
+      } else {
+        sent = btLinkSendCmd(cmd, JsonVariantConst(), pct);
+      }
+      if (!sent) {
+        StaticJsonDocument<160> errDoc;
+        errDoc["type"] = "error";
+        errDoc["error"] = "bt_cmd_failed";
+        String out; serializeJson(errDoc, out);
+        client->text(out);
+        return;
+      }
+      StaticJsonDocument<192> ack;
+      ack["type"] = "bt_cmd_ack";
+      ack["cmd"] = cmd;
+      ack["sent"] = true;
+      wsSendReliable(client, ack);
+      return;
+    }
+
     if (strcmp(mtype, "set_settings") == 0) {
       JsonObject data = doc["data"];
       if (data.containsKey("pid_enabled")) settings.pid_enabled = data["pid_enabled"].as<bool>();
@@ -473,7 +1029,7 @@ static void registerHttpRoutes() {
   server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
 
   server.on("/api/state", HTTP_GET, [](AsyncWebServerRequest* req){
-    StaticJsonDocument<1280> doc;
+    StaticJsonDocument<1792> doc;
     if (isnan(state.temp1)) {
       doc["temp1"] = nullptr;
     } else {
@@ -484,7 +1040,15 @@ static void registerHttpRoutes() {
     } else {
       doc["temp2"] = state.temp2;
     }
-    doc["fan_rpm"] = state.fan_rpm;
+    if (kFanType == FanType::Fan4Wire) {
+      doc["fan_rpm"] = state.fan_rpm;
+      doc["fan1_rpm"] = state.fan1_rpm;
+      doc["fan2_rpm"] = state.fan2_rpm;
+    } else {
+      doc["fan_rpm"] = nullptr;
+      doc["fan1_rpm"] = nullptr;
+      doc["fan2_rpm"] = nullptr;
+    }
     doc["fan_target_pct"] = state.fan_target_pct;
     doc["fan_count"] = activeFanCount();
     doc["pid_enabled"] = settings.pid_enabled;
@@ -494,9 +1058,92 @@ static void registerHttpRoutes() {
     populateDspState(dsp);
     auto sys = doc.createNestedObject("sys");
     fillSystemInfo(sys);
+    auto bt = doc.createNestedObject("bt");
+    btLinkPopulateState(bt);
     String out; serializeJson(doc, out);
     req->send(200, "application/json", out);
   });
+
+  server.on("/api/bt/state", HTTP_GET, [](AsyncWebServerRequest* req){
+    StaticJsonDocument<1792> doc;
+    btLinkPopulateState(doc.to<JsonObject>(), true);
+    String out; serializeJson(doc, out);
+    req->send(200, "application/json", out);
+  });
+
+  server.on("/api/bt/devices", HTTP_GET, [](AsyncWebServerRequest* req){
+    StaticJsonDocument<1792> doc;
+    auto root = doc.to<JsonObject>();
+    btLinkPopulateState(root, true);
+    String out; serializeJson(doc, out);
+    req->send(200, "application/json", out);
+  });
+
+  auto* btCmdHandler = new AsyncCallbackJsonWebHandler("/api/bt/cmd",
+    [](AsyncWebServerRequest* req, JsonVariant& json) {
+      auto sendErr = [&](const char* msg, int code = 400) {
+        StaticJsonDocument<160> resp;
+        resp["ok"] = false;
+        resp["error"] = msg;
+        String out; serializeJson(resp, out);
+        req->send(code, "application/json", out);
+      };
+      if (!json.is<JsonObject>()) {
+        sendErr("invalid_payload");
+        return;
+      }
+      JsonObject obj = json.as<JsonObject>();
+      const char* cmd = obj["cmd"] | nullptr;
+      if (!cmd) {
+        sendErr("missing_cmd");
+        return;
+      }
+      if (!bt_link_ready) {
+        sendErr("bt_link_unavailable", 503);
+        return;
+      }
+      int pct = -1;
+      if (obj.containsKey("pct")) {
+        pct = obj["pct"].as<int>();
+      }
+      const char* addr = obj["addr"] | nullptr;
+      JsonArrayConst order = (obj.containsKey("order") && obj["order"].is<JsonArray>()) ? obj["order"].as<JsonArrayConst>() : JsonArrayConst();
+      uint32_t timeout_ms = obj["timeout_ms"] | 0;
+      bool sent = false;
+      if (strcmp(cmd, "priority") == 0) {
+        if (order.isNull()) {
+          sendErr("missing_order");
+          return;
+        }
+        sent = btLinkSendPriority(order, JsonVariantConst());
+      } else if (strcmp(cmd, "connect") == 0 || strcmp(cmd, "forget") == 0) {
+        if (!addr || strlen(addr) == 0) {
+          sendErr("missing_addr");
+          return;
+        }
+        sent = btLinkSendCmdWithAddr(cmd, addr, JsonVariantConst());
+      } else if (strcmp(cmd, "pair_start") == 0) {
+        StaticJsonDocument<256> tx;
+        tx["type"] = "cmd";
+        tx["cmd"] = "pair_start";
+        tx["id"] = bt_cmd_counter++;
+        if (timeout_ms > 0) tx["timeout_ms"] = timeout_ms;
+        sent = btLinkSendDoc(tx, true);
+      } else if (strcmp(cmd, "pair_stop") == 0 || strcmp(cmd, "pair_cancel") == 0) {
+        sent = btLinkSendCmd("pair_stop", JsonVariantConst(), -1);
+      } else {
+        sent = btLinkSendCmd(cmd, JsonVariantConst(), pct);
+      }
+      if (!sent) {
+        sendErr("bt_cmd_failed", 502);
+        return;
+      }
+      StaticJsonDocument<96> resp;
+      resp["ok"] = true;
+      String out; serializeJson(resp, out);
+      req->send(200, "application/json", out);
+    });
+  server.addHandler(btCmdHandler);
 
   server.on("/api/dsp/schema", HTTP_GET, [](AsyncWebServerRequest* req){
     StaticJsonDocument<2304> doc;
@@ -1052,7 +1699,7 @@ static void sampleSensors() {
   float t2 = (a2 >= 0) ? thermistorAdcToC(a2, thermistor_params[1]) : NAN;
   state.temp1 = sanitizeTemperature(t1, 0);
   state.temp2 = sanitizeTemperature(t2, 1);
-  // TODO: tach read via PCNT or RMT; set to 0 for now
+  sampleFanTach();
   if (THERMISTOR_DEBUG_LOG) {
     static uint32_t last_report = 0;
     const uint32_t now = millis();
@@ -1061,6 +1708,31 @@ static void sampleSensors() {
       Serial.printf("Therm ADC: ch1=%d temp=%.2fC, ch2=%d temp=%.2fC\n", a1, state.temp1, a2, state.temp2);
     }
   }
+}
+
+static void sampleFanTach() {
+  if (kFanType != FanType::Fan4Wire) {
+    state.fan_rpm = 0;
+    state.fan1_rpm = 0;
+    state.fan2_rpm = 0;
+    return;
+  }
+  const uint32_t now = millis();
+  uint32_t elapsed = now - fan_tach_last_ms;
+  if (elapsed < 50) return; // limit rate
+  fan_tach_last_ms = now;
+  uint32_t pulses[2];
+  noInterrupts();
+  pulses[0] = fan_tach_counts[0] - fan_tach_prev[0];
+  pulses[1] = fan_tach_counts[1] - fan_tach_prev[1];
+  fan_tach_prev[0] = fan_tach_counts[0];
+  fan_tach_prev[1] = fan_tach_counts[1];
+  interrupts();
+  state.fan1_rpm = fanTachEnabled(0) ? rpmFromPulses(pulses[0], elapsed) : 0;
+  state.fan2_rpm = fanTachEnabled(1) ? rpmFromPulses(pulses[1], elapsed) : 0;
+  if (state.fan1_rpm) state.fan_rpm = state.fan1_rpm;
+  else if (state.fan2_rpm) state.fan_rpm = state.fan2_rpm;
+  else state.fan_rpm = 0;
 }
 
 static void populateThermStatus(JsonObject obj) {
@@ -1129,6 +1801,24 @@ static void fillSystemInfo(JsonObject obj) {
     obj["fs_total"] = 0;
     obj["fs_used"] = 0;
   }
+  auto bt = obj.createNestedObject("bt_link");
+  bt["enabled"] = BT_LINK_ENABLED;
+  bt["online"] = bt_link_state.online;
+  bt["hello_seen"] = bt_link_state.hello_seen;
+  bt["last_seen_ms"] = bt_link_state.last_seen_ms;
+  bt["last_seen_age_ms"] = bt_link_state.last_seen_age_ms;
+  bt["uart_baud"] = BT_LINK_BAUD;
+  if (bt_link_state.bt_name.length()) bt["bt_name"] = bt_link_state.bt_name;
+  if (bt_link_state.fw.length()) bt["fw"] = bt_link_state.fw;
+  if (bt_link_state.fw_version.length()) bt["fw_version"] = bt_link_state.fw_version;
+  if (bt_link_state.fw_build.length()) bt["fw_build"] = bt_link_state.fw_build;
+  bt["link_proto"] = bt_link_state.proto;
+  if (bt_link_state.peer_addr.length()) bt["peer_addr"] = bt_link_state.peer_addr;
+  if (bt_link_state.peer_name.length()) bt["peer_name"] = bt_link_state.peer_name;
+  auto pairing = bt.createNestedObject("pairing");
+  pairing["active"] = bt_link_state.pairing.active;
+  pairing["remaining_ms"] = bt_link_state.pairing.remaining_ms;
+  pairing["supported"] = bt_link_state.pairing_supported;
   populateThermStatus(obj);
 }
 
@@ -1962,6 +2652,9 @@ void setup() {
     ledcAttachChannel(FAN_CTRL_PINS[i], pwm_freq, FAN_PWM_RES_BITS, FAN_PWM_CHANNELS[i]);
   }
   applyFanOutput(settings.pid_enabled ? 20 : settings.fan_manual_pct);
+  tachInit();
+
+  btLinkInit();
 
   ws.onEvent(onWsEvent);
   server.addHandler(&ws);
@@ -1974,6 +2667,7 @@ void setup() {
 }
 
 void loop() {
+  btLinkTick();
   if (settings_dirty && millis() - settings_dirty_since > SETTINGS_SAVE_DELAY_MS) {
     settings_dirty = false;
     settingsSave(prefs, settings);

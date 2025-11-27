@@ -62,6 +62,28 @@ const S = {
   thermMessage: $('therm-message'),
   thermSession: $('therm-session'),
   thermTableBody: $('therm-table-body'),
+  btChip: $('bt-chip'),
+  btStatus: $('bt-status'),
+  btDevice: $('bt-device'),
+  btProto: $('bt-proto'),
+  btSampleRate: $('bt-sr'),
+  btLastSeen: $('bt-last-seen'),
+  btMeta: $('bt-meta'),
+  btFlags: $('bt-flags'),
+  btVolume: $('bt-volume'),
+  btVolumeValue: $('bt-volume-value'),
+  btPlay: $('bt-play'),
+  btPrev: $('bt-prev'),
+  btNext: $('bt-next'),
+  btRefresh: $('bt-refresh'),
+  btPairing: $('bt-pairing'),
+  btDevicesList: $('bt-devices-list'),
+  btMoveUp: $('bt-move-up'),
+  btMoveDown: $('bt-move-down'),
+  btConnect: $('bt-connect'),
+  btForget: $('bt-forget'),
+  btPairStart: $('bt-pair-start'),
+  btPairStop: $('bt-pair-stop'),
   dspControls: $('dsp-controls'),
   dspHwStatus: $('dsp-hw-status'),
   dspActiveBundle: $('dsp-active-bundle'),
@@ -88,8 +110,34 @@ const S = {
     modeDirty: false,
     manualDirty: false,
     appliedPid: true,
-    appliedManualPct: 30,
-    sys: {},
+  appliedManualPct: 30,
+  sys: {},
+  bt: {
+    online: false,
+    hello_seen: false,
+    connected: false,
+    avrcp: false,
+    audio_active: false,
+    playing: false,
+    volume_pct: 0,
+    sample_rate_hz: 0,
+    last_seen_ms: 0,
+    last_seen_age_ms: 0,
+    title: '',
+    artist: '',
+    album: '',
+    peer_addr: '',
+    peer_name: '',
+    bt_name: '',
+    fw: '',
+    fw_version: '',
+    fw_build: '',
+    link_proto: 0,
+    devices: [],
+    pairing: { active: false, remaining_ms: 0, supported: false },
+    selectedAddr: null,
+    updatedAt: 0
+  },
     therm: {
       calibrations: [],
       session: {}
@@ -270,6 +318,23 @@ const S = {
     }
     const decimals = value < 10 ? 2 : value < 100 ? 1 : 0;
     return `${value.toFixed(decimals)} ${units[idx]}`;
+  }
+
+  function formatSampleRate(hz) {
+    const rate = Number(hz);
+    if (!Number.isFinite(rate) || rate <= 0) return '—';
+    if (rate >= 1000000) return `${(rate / 1000000).toFixed(2)} MHz`;
+    if (rate >= 1000) return `${(rate / 1000).toFixed(1)} kHz`;
+    return `${rate.toFixed(0)} Hz`;
+  }
+
+  function formatAgo(ms) {
+    if (!Number.isFinite(ms) || ms <= 0) return '—';
+    const sec = Math.floor(ms / 1000);
+    if (sec < 2) return 'just now';
+    if (sec < 60) return `${sec}s ago`;
+    if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+    return `${Math.floor(sec / 3600)}h ago`;
   }
 
   function storeThermState(calibrations, session) {
@@ -563,6 +628,217 @@ const S = {
     S.manpctValue.textContent = `${pct}%${pendingLabel ? ' (pending)' : ''}`;
   }
 
+  function renderBtCard() {
+    const bt = stateCache.bt || {};
+    const online = !!bt.online;
+    if (S.btChip) {
+      S.btChip.classList.remove('good', 'bad', 'pending', 'idle');
+      S.btChip.classList.add(online ? 'good' : 'idle');
+    }
+    if (S.btStatus) {
+      const flags = [];
+      if (bt.connected) flags.push('A2DP');
+      if (bt.avrcp) flags.push('AVRCP');
+      if (bt.audio_active) flags.push('audio');
+      S.btStatus.textContent = online ? (flags.length ? flags.join(' · ') : 'online') : 'offline';
+    }
+    if (S.btDevice) {
+      const name = bt.peer_name || bt.bt_name || bt.fw || 'bt2i2s';
+      S.btDevice.textContent = name;
+    }
+    if (S.btProto) {
+      S.btProto.textContent = bt.link_proto ? `v${bt.link_proto}` : '—';
+    }
+    if (S.btSampleRate) {
+      S.btSampleRate.textContent = formatSampleRate(bt.sample_rate_hz);
+    }
+    if (S.btFlags) {
+      const parts = [];
+      if (bt.connected) parts.push('Connected');
+      if (bt.audio_active) parts.push('Audio active');
+      if (bt.playing) parts.push('Playing');
+      S.btFlags.textContent = parts.length ? parts.join(' · ') : (online ? 'Idle' : 'Offline');
+    }
+    if (S.btMeta) {
+      const metaPieces = [];
+      if (bt.title) metaPieces.push(bt.title);
+      if (bt.artist) metaPieces.push(bt.artist);
+      if (bt.album) metaPieces.push(bt.album);
+      S.btMeta.textContent = metaPieces.length ? metaPieces.join(' — ') : 'No metadata';
+    }
+    if (S.btVolume) {
+      const vol = clamp(Number(bt.volume_pct) || 0, 0, 100);
+      S.btVolume.value = vol;
+      if (S.btVolumeValue) {
+        S.btVolumeValue.textContent = `${vol}%`;
+      }
+    }
+    if (S.btPlay) {
+      S.btPlay.textContent = bt.playing ? 'Pause' : 'Play';
+      S.btPlay.disabled = !online;
+    }
+    if (S.btPrev) S.btPrev.disabled = !online;
+    if (S.btNext) S.btNext.disabled = !online;
+    if (S.btVolume) S.btVolume.disabled = !online;
+    if (S.btRefresh) S.btRefresh.disabled = false;
+    if (S.btLastSeen) {
+      S.btLastSeen.textContent = formatAgo(bt.last_seen_age_ms);
+    }
+    if (S.btPairing) {
+      if (bt.pairing?.active) {
+        const remaining = Number(bt.pairing.remaining_ms) || 0;
+        const sec = Math.max(0, Math.floor(remaining / 1000));
+        S.btPairing.textContent = `Pairing (${sec}s left)`;
+      } else if (bt.hello_seen && !bt.pairing?.supported) {
+        S.btPairing.textContent = 'Pairing unsupported by link';
+      } else {
+        S.btPairing.textContent = 'Idle';
+      }
+    }
+    renderBtDevices();
+  }
+
+  function renderBtDevices() {
+    const container = S.btDevicesList;
+    if (!container) return;
+    container.innerHTML = '';
+    const devices = Array.isArray(stateCache.bt.devices) ? [...stateCache.bt.devices] : [];
+    devices.sort((a, b) => (Number(a.priority) || 0) - (Number(b.priority) || 0));
+    if (!devices.length) {
+      const empty = document.createElement('div');
+      empty.className = 'muted';
+      empty.textContent = stateCache.bt.link_proto >= 2 ? 'No paired devices reported' : 'Link too old for device list';
+      container.appendChild(empty);
+      disableDeviceButtons(true);
+      return;
+    }
+    let selected = stateCache.bt.selectedAddr;
+    if (!selected || !devices.some((d) => d.addr === selected)) {
+      selected = devices[0].addr || null;
+      stateCache.bt.selectedAddr = selected;
+    }
+    devices.forEach((dev) => {
+      const row = document.createElement('button');
+      row.className = 'bt-device-item';
+      row.type = 'button';
+      row.dataset.addr = dev.addr;
+      if (dev.addr === selected) row.classList.add('active');
+      const title = document.createElement('div');
+      title.className = 'bt-device-name';
+      title.textContent = dev.name || dev.addr || 'Unknown';
+      const meta = document.createElement('div');
+      meta.className = 'bt-device-meta';
+      const bits = [];
+      bits.push(`Priority ${dev.priority || '-'}`);
+      if (dev.connected) bits.push('Connected');
+      else if (dev.last_seen_ms) bits.push('Seen recently');
+      meta.textContent = bits.join(' · ');
+      row.appendChild(title);
+      row.appendChild(meta);
+      row.addEventListener('click', () => {
+        stateCache.bt.selectedAddr = dev.addr;
+        renderBtDevices();
+      });
+      container.appendChild(row);
+    });
+    disableDeviceButtons(false);
+  }
+
+  function disableDeviceButtons(disabled) {
+    const controls = [S.btMoveUp, S.btMoveDown, S.btConnect, S.btForget];
+    controls.forEach((btn) => {
+      if (btn) btn.disabled = disabled || stateCache.bt.link_proto < 2 || !stateCache.bt.online;
+    });
+    if (S.btPairStart) S.btPairStart.disabled = stateCache.bt.link_proto < 2 || !stateCache.bt.online;
+    if (S.btPairStop) S.btPairStop.disabled = stateCache.bt.link_proto < 2 || !stateCache.bt.online;
+  }
+
+  function applyBtDevices(devices = [], pairing = {}, pairingSupported) {
+    if (Array.isArray(devices)) {
+      const mapped = devices
+        .filter((d) => d && d.addr)
+        .map((d) => ({
+          addr: d.addr,
+          name: d.name || '',
+          priority: Number(d.priority) || 0,
+          connected: !!d.connected,
+          last_seen_ms: Number(d.last_seen_ms) || 0
+        }))
+        .sort((a, b) => (a.priority || 0) - (b.priority || 0));
+      stateCache.bt.devices = mapped;
+      if (!stateCache.bt.selectedAddr && mapped.length) {
+        stateCache.bt.selectedAddr = mapped[0].addr;
+      } else if (
+        stateCache.bt.selectedAddr &&
+        !mapped.some((d) => d.addr === stateCache.bt.selectedAddr)
+      ) {
+        stateCache.bt.selectedAddr = mapped.length ? mapped[0].addr : null;
+      }
+    }
+    if (pairing && typeof pairing === 'object') {
+      stateCache.bt.pairing = {
+        active: !!pairing.active,
+        remaining_ms: Number(pairing.remaining_ms) || 0,
+        supported:
+          pairingSupported !== undefined
+            ? !!pairingSupported
+            : pairing.supported !== undefined
+            ? !!pairing.supported
+            : stateCache.bt.pairing.supported
+      };
+    } else if (pairingSupported !== undefined) {
+      stateCache.bt.pairing.supported = !!pairingSupported;
+    }
+    renderBtDevices();
+  }
+
+  function applyBtState(raw = {}) {
+    const now = Date.now();
+    const next = { ...stateCache.bt };
+    if (Object.prototype.hasOwnProperty.call(raw, 'hello_seen')) next.hello_seen = !!raw.hello_seen;
+    if (Object.prototype.hasOwnProperty.call(raw, 'online')) next.online = !!raw.online;
+    if (Object.prototype.hasOwnProperty.call(raw, 'connected')) next.connected = !!raw.connected;
+    if (Object.prototype.hasOwnProperty.call(raw, 'avrcp')) next.avrcp = !!raw.avrcp;
+    if (Object.prototype.hasOwnProperty.call(raw, 'audio_active')) next.audio_active = !!raw.audio_active;
+    if (Object.prototype.hasOwnProperty.call(raw, 'playing')) next.playing = !!raw.playing;
+    if (Number.isFinite(raw.volume_pct)) next.volume_pct = clamp(Number(raw.volume_pct), 0, 100);
+    if (Number.isFinite(raw.sample_rate_hz)) next.sample_rate_hz = Number(raw.sample_rate_hz);
+    if (Number.isFinite(raw.last_seen_ms)) next.last_seen_ms = Number(raw.last_seen_ms);
+    if (Number.isFinite(raw.last_seen_age_ms)) next.last_seen_age_ms = Number(raw.last_seen_age_ms);
+    if (typeof raw.title === 'string') next.title = raw.title;
+    if (typeof raw.artist === 'string') next.artist = raw.artist;
+    if (typeof raw.album === 'string') next.album = raw.album;
+    if (typeof raw.peer_addr === 'string') next.peer_addr = raw.peer_addr;
+    if (typeof raw.peer_name === 'string') next.peer_name = raw.peer_name;
+    if (typeof raw.bt_name === 'string') next.bt_name = raw.bt_name;
+    if (typeof raw.fw === 'string') next.fw = raw.fw;
+    if (typeof raw.fw_version === 'string') next.fw_version = raw.fw_version;
+    if (typeof raw.fw_build === 'string') next.fw_build = raw.fw_build;
+    if (Number.isFinite(raw.link_proto)) next.link_proto = Number(raw.link_proto);
+    if (raw.pairing && typeof raw.pairing === 'object') {
+      next.pairing = {
+        active: !!raw.pairing.active,
+        remaining_ms: Number(raw.pairing.remaining_ms) || 0,
+        supported:
+          raw.pairing.supported !== undefined
+            ? !!raw.pairing.supported
+            : next.pairing.supported
+      };
+    }
+    if (raw.pairing_supported !== undefined) next.pairing.supported = !!raw.pairing_supported;
+    if (next.link_proto >= 2 && raw.pairing === undefined && raw.pairing_supported === undefined) {
+      next.pairing.supported = true;
+    }
+    if (next.connected || next.audio_active || next.playing) next.online = next.online || next.connected;
+    next.updatedAt = now;
+    stateCache.bt = next;
+    if (Array.isArray(raw.devices) || raw.pairing) {
+      applyBtDevices(raw.devices, raw.pairing, raw.pairing_supported);
+    } else {
+      renderBtCard();
+    }
+  }
+
   function connectWS() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const url = `${proto}://${location.host}/ws`;
@@ -601,7 +877,7 @@ const S = {
         }
         switch (msg.type) {
           case 'state':
-            applyState(msg.data || {}, msg.dsp || {}, msg.sys || {});
+            applyState(msg.data || {}, msg.dsp || {}, msg.sys || {}, msg.bt || {});
             ack(msg.id);
             break;
           case 'pong':
@@ -612,6 +888,16 @@ const S = {
             break;
           case 'logs':
             renderLogs(msg.data);
+            break;
+          case 'bt_devices': {
+            const source = msg.data || msg.bt || msg;
+            applyBtDevices(source.devices || source, source.pairing, source.pairing_supported);
+            ack(msg.id);
+            break;
+          }
+          case 'bt_state':
+            applyBtState(msg.data || msg.bt || msg);
+            ack(msg.id);
             break;
           default:
             break;
@@ -640,6 +926,7 @@ const S = {
       if (pending.has(id) && ws?.readyState === WebSocket.OPEN) {
         ws.send(payload);
       }
+      pending.delete(id);
     }, 2000);
     pending.set(id, timer);
   }
@@ -650,7 +937,13 @@ const S = {
     pending.delete(id);
   }
 
-  function applyState(core, dsp, sys) {
+  function sendBtCmd(cmd, payload = {}) {
+    if (!cmd) return;
+    const body = { cmd, ...payload };
+    send('bt_cmd', body);
+  }
+
+  function applyState(core, dsp, sys, bt = {}) {
     lastUpdateTs = Date.now();
     if (typeof core.temp1 === 'number') S.temp1.textContent = `${core.temp1.toFixed(1)} °C`; else S.temp1.textContent = '—';
     if (typeof core.temp2 === 'number') S.temp2.textContent = `${core.temp2.toFixed(1)} °C`; else S.temp2.textContent = '—';
@@ -711,6 +1004,11 @@ const S = {
     }
     updateDspHardwareStatus();
     updateSystemInfo(sys);
+    if (bt && typeof bt === 'object') {
+      applyBtState(bt);
+    } else if (sys && typeof sys === 'object' && sys.bt_link) {
+      applyBtState(sys.bt_link);
+    }
   }
 
   function renderLogs(lines) {
@@ -1198,6 +1496,90 @@ const S = {
     send('get_state');
   });
 
+  if (S.btPlay) {
+    S.btPlay.addEventListener('click', () => {
+      const nextCmd = stateCache.bt.playing ? 'pause' : 'play';
+      sendBtCmd(nextCmd);
+    });
+  }
+  if (S.btPrev) S.btPrev.addEventListener('click', () => sendBtCmd('prev'));
+  if (S.btNext) S.btNext.addEventListener('click', () => sendBtCmd('next'));
+  if (S.btVolume) {
+    const updateVolLabel = (val) => {
+      if (S.btVolumeValue) S.btVolumeValue.textContent = `${val}%`;
+    };
+    S.btVolume.addEventListener('input', (ev) => {
+      const v = clamp(Number(ev.target.value) || 0, 0, 100);
+      updateVolLabel(v);
+    });
+    S.btVolume.addEventListener('change', (ev) => {
+      const v = clamp(Number(ev.target.value) || 0, 0, 100);
+      updateVolLabel(v);
+      sendBtCmd('volume', { pct: v });
+    });
+  }
+  if (S.btRefresh) {
+    S.btRefresh.addEventListener('click', () => {
+      sendBtCmd('hello');
+      sendBtCmd('state');
+    });
+  }
+
+  const getOrderedDevices = () =>
+    (Array.isArray(stateCache.bt.devices) ? [...stateCache.bt.devices] : []).sort(
+      (a, b) => (Number(a.priority) || 0) - (Number(b.priority) || 0)
+    );
+
+  const sendPriority = (list) => {
+    const order = list.map((d) => d.addr).filter(Boolean);
+    if (!order.length) return;
+    sendBtCmd('priority', { order });
+  };
+
+  const moveDevice = (dir) => {
+    if (stateCache.bt.link_proto < 2) return;
+    const devices = getOrderedDevices();
+    const idx = devices.findIndex((d) => d.addr === stateCache.bt.selectedAddr);
+    if (idx < 0) return;
+    const swapIdx = dir === 'up' ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= devices.length) return;
+    [devices[idx], devices[swapIdx]] = [devices[swapIdx], devices[idx]];
+    devices.forEach((d, i) => {
+      d.priority = i + 1;
+    });
+    stateCache.bt.devices = devices;
+    stateCache.bt.selectedAddr = devices[idx].addr;
+    renderBtDevices();
+    sendPriority(devices);
+  };
+
+  if (S.btMoveUp) S.btMoveUp.addEventListener('click', () => moveDevice('up'));
+  if (S.btMoveDown) S.btMoveDown.addEventListener('click', () => moveDevice('down'));
+  if (S.btConnect) {
+    S.btConnect.addEventListener('click', () => {
+      if (!stateCache.bt.selectedAddr) return;
+      sendBtCmd('connect', { addr: stateCache.bt.selectedAddr });
+    });
+  }
+  if (S.btForget) {
+    S.btForget.addEventListener('click', () => {
+      if (!stateCache.bt.selectedAddr) return;
+      sendBtCmd('forget', { addr: stateCache.bt.selectedAddr });
+    });
+  }
+  if (S.btPairStart) {
+    S.btPairStart.addEventListener('click', () => {
+      if (stateCache.bt.link_proto < 2) return;
+      sendBtCmd('pair_start', { timeout_ms: 120000 });
+    });
+  }
+  if (S.btPairStop) {
+    S.btPairStop.addEventListener('click', () => {
+      if (stateCache.bt.link_proto < 2) return;
+      sendBtCmd('pair_stop');
+    });
+  }
+
   S.getlogs.addEventListener('click', () => send('get_logs'));
   S.clearlog.addEventListener('click', () => { S.log.textContent = '(empty)'; });
 
@@ -1293,8 +1675,21 @@ const S = {
     }
   }
 
+  async function refreshBtState() {
+    try {
+      const res = await fetch('/api/bt/state');
+      if (!res.ok) return;
+      const data = await res.json();
+      applyBtState(data);
+    } catch {
+      // ignore initial fetch errors
+    }
+  }
+
   refreshThermUI();
   refreshThermStatus();
+  renderBtCard();
+  refreshBtState();
 
   setInterval(() => send('ping'), 5000);
   setInterval(updateLastUpdateLabel, 1000);

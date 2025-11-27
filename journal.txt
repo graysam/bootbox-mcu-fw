@@ -440,3 +440,31 @@ Prompt: please add an interactive mode for the build tooling if invoked without 
   - Added screen clearing to all interactive menus (main dashboard, definition selector, overrides dialog, definition manager) so the UI refreshes cleanly as you navigate.
 - tools/target-build.sh
   - Enhanced the interactive flow to keep users inside the menu: status messages persist across clears, build/flash actions now pause (success or error) instead of exiting, and missing artifacts (e.g., `flash-manifest.json`) trigger guided fixes or automatic rebuilds before flashing.
+Prompt: please familiarise yourself with the project, some establishing notes are available in the journal.txt file, and much of the ethos can be gleaned from the documentation. then please look more specifically at the implementation. Another agent has just made some changes to the bootbox code to integrate it with a second ESP32 board -- I want you to validate his work and ensure the system is consistent and consideration for stability is made, specifically to communications between the three-device network. (esp32-wroom, esp32-S3, ADAU1701).
+- firmware/arduino/bootbox_mcu_fw/config.h
+  - Reviewed new Bluetooth link pin/baud defaults and target-specific mappings to understand UART wiring expectations.
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
+  - Reviewed bt2i2s UART link handling, WS/HTTP surfaces, heartbeat/timeout logic, and state propagation for stability assessment.
+- firmware/arduino/bootbox_mcu_fw/data/app.js
+  - Reviewed System tab Bluetooth card behavior, WS retry adjustments, and bt_cmd dispatch flow.
+- firmware/arduino/bootbox_mcu_fw/data/index.html
+  - Reviewed UI layout additions for the Bluetooth link card and controls. No code changes made.
+Prompt: please address these issues holistically and thoroughly, and any possible bugs or concerns you may find in the process. work across both bootbox AND bt2i2s codebases to ensure consistency of the system. Please keep in mind the end user...
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
+  - Hardened bt-link handling: fixed hello parsing (fw vs version), added link-ready gating for WS/HTTP BT commands, cleared stale metadata/state on timeout, tracked last_seen age, and parsed new bt_devices frames. Added device/pairing state surfaces, WS/API endpoints for device list, and retry-less error responses when UART is unavailable. Increased JSON buffers for larger payloads and added device request polling for proto>=2.
+- firmware/arduino/bootbox_mcu_fw/config.h
+  - Expanded BT buffer sizes to match richer link frames.
+- firmware/arduino/bootbox_mcu_fw/data/app.js
+  - Updated BT state handling to use link-reported age instead of client timestamps, added device/pairing management (list, reorder, connect/forget, pairing start/stop), and disabled controls when the link is offline/unsupported. Adjusted bt_cmd payloads and UI rendering to surface new metadata.
+- firmware/arduino/bootbox_mcu_fw/data/index.html
+  - Added paired-device UI elements (list, priority controls, pairing buttons) and styling for the Bluetooth card.
+- /home/sam/Documents/bt2i2s/firmware/arduino/bt2i2s/bt2i2s.ino
+  - Extended link protocol to v2 with paired-device management: added Preferences-backed registry, bonded-device sync, connect/forget/priority/pairing commands, pairing mode with timeout, and autoconnect to top-priority device. Included peer metadata in state frames and device lists, cleared stale state on drop, and exposed hello/cmd features list. Added build guards for legacy I2S API and gap scan-mode handling compatible with esp32 core 3.3.x.
+- Builds
+  - Bootbox firmware: `arduino-cli compile --config-file arduino-cli.yaml --fqbn esp32:esp32:esp32 firmware/arduino/bootbox_mcu_fw`
+  - bt2i2s firmware: compiled against bootbox toolchain/libs via `arduino-cli compile --config-file ../bootbox-mcu-fw/arduino-cli.yaml --fqbn esp32:esp32:esp32 --libraries firmware/arduino/libraries firmware/arduino/bt2i2s` (local bt2i2s arduino data lacks esp32 core; initial install attempt timed out on the 428MB esp32 libs download).
+Prompt: please now thoroughly comb through the bootbox code specifically... ensure ESP32-S3 features/pins are appropriate
+- Review only: audited Bootbox firmware/config/docs for ESP32-S3 targeting, checked pin assignments (UART12/13 link, I2C 8/9, therm 4/5, fans 16/17, LED_BUILTIN) against DevKitC-1 availability/strap pins, confirmed no conflicts; noted the onboard RGB LED needs a proper WS2812 driver (StatusLed will not light it). No code changes made.
+Prompt: Please also flesh out and complete the implementation of the 4-wire fan tachometer feedback...
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
+  - Implemented 4-wire fan tach counting (interrupt-driven), RPM calculation, and state reporting; gated tach data to 4-wire mode only and kept 3-wire as default. Added per-fan RPM plus representative RPM in API/WS state and initialized tach hardware during setup.

@@ -195,6 +195,43 @@
         display: flex;
         gap: 8px;
       }
+      .btn-group {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .bt-controls {
+        display: flex;
+        gap: 14px;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+      }
+      .bt-device-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .bt-device-item {
+        padding: 10px 12px;
+        border: 1px solid rgba(40,55,78,0.6);
+        border-radius: 8px;
+        background: rgba(0,0,0,0.18);
+        color: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+      .bt-device-item.active {
+        border-color: #8bc3ff;
+        box-shadow: 0 0 0 1px rgba(139,195,255,0.3);
+      }
+      .bt-device-name {
+        font-weight: 600;
+      }
+      .bt-device-meta {
+        font-size: 12px;
+        color: rgba(255,255,255,0.7);
+      }
       .bundle-list {
         border: 1px solid rgba(40,55,78,0.6);
         border-radius: 12px;
@@ -1024,6 +1061,85 @@
                   <span class="meta-value" id="sys-fs">—</span>
                   <span class="meta-hint" id="sys-fs-hint">Filesystem not mounted</span>
                 </div>
+              </div>
+            </div>
+          </article>
+
+          <article class="card bt-link collapsible" data-card="bt-link">
+            <header class="card-header">
+              <div>
+                <h2>Bluetooth Link</h2>
+                <span class="muted">A2DP/AVRCP sink (bt2i2s)</span>
+              </div>
+              <div class="header-actions">
+                <span class="chip idle" id="bt-chip">
+                  <span class="dot"></span>
+                  <span id="bt-status">offline</span>
+                </span>
+                <button class="collapse-toggle" aria-label="Toggle Bluetooth">
+                  <span class="chevron">▾</span>
+                </button>
+              </div>
+            </header>
+            <div class="card-body">
+              <div class="meta-grid">
+                <div class="meta-row">
+                  <span class="meta-label">Device</span>
+                  <span class="meta-value" id="bt-device">—</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-label">Link proto</span>
+                  <span class="meta-value" id="bt-proto">—</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-label">Sample rate</span>
+                  <span class="meta-value" id="bt-sr">—</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-label">Last seen</span>
+                  <span class="meta-value" id="bt-last-seen">—</span>
+                </div>
+              </div>
+              <div class="meta-grid">
+                <div class="meta-row">
+                  <span class="meta-label">State</span>
+                  <span class="meta-value" id="bt-flags">—</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-label">Metadata</span>
+                  <span class="meta-value" id="bt-meta">—</span>
+                </div>
+              </div>
+              <div class="bt-controls">
+                <div class="btn-group">
+                  <button class="secondary" id="bt-prev">Prev</button>
+                  <button id="bt-play">Play</button>
+                  <button class="secondary" id="bt-next">Next</button>
+                </div>
+                <div class="slider-row">
+                  <input id="bt-volume" type="range" min="0" max="100" step="1" />
+                  <span class="value-sm" id="bt-volume-value">0%</span>
+                </div>
+              </div>
+              <div class="actions">
+                <button class="secondary" id="bt-refresh">Resync</button>
+              </div>
+              <div class="meta-grid">
+                <div class="meta-row">
+                  <span class="meta-label">Pairing</span>
+                  <span class="meta-value" id="bt-pairing">—</span>
+                </div>
+              </div>
+              <div class="bt-device-list" id="bt-devices-list"></div>
+              <div class="btn-group">
+                <button class="secondary" id="bt-move-up">Move up</button>
+                <button class="secondary" id="bt-move-down">Move down</button>
+                <button id="bt-connect">Connect</button>
+                <button class="secondary" id="bt-forget">Forget</button>
+              </div>
+              <div class="btn-group">
+                <button id="bt-pair-start">Start pairing</button>
+                <button class="secondary" id="bt-pair-stop">Stop pairing</button>
               </div>
             </div>
           </article>
