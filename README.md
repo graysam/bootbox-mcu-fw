@@ -1,6 +1,11 @@
 ## BOOTBOX DSP MCU Firmware
 
-Firmware for a Wi-Fi MCU system controller for a DIY car stereo using an ADAU1701 DSP. The controller hosts a local web UI, provides a robust WebSocket control channel, manages thermal control (PID/manual), and stores presets/assets in LittleFS.
+Firmware for a Wi-Fi MCU system controller for a DIY car stereo using an ADAU1701 DSP. The controller hosts a local web UI, provides a robust WebSocket control channel, manages thermal control (PID/manual), and stores presets/assets in LittleFS. The repository also now houses the companion bt2i2s firmware so both sides of the link evolve together.
+
+## Firmware modules
+- `firmware/arduino/bootbox_mcu_fw/` — main controller (ESP32-S3 or ESP32). Build with `tools/target-build.sh --target esp32s3-devkitc --flash` (or esp32-devkitc) or direct `arduino-cli compile --fqbn ... firmware/arduino/bootbox_mcu_fw`.
+- `firmware/arduino/bt2i2s/` — Bluetooth A2DP/AVRCP sink feeding ADAU via I2S (ESP32 WROOM DevKitC). Build with `arduino-cli compile --fqbn esp32:esp32:esp32 firmware/arduino/bt2i2s` (uses shared `arduino-cli.yaml` and vendored ESP32-A2DP library).
+- When changing the UART link protocol or behavior, update both firmwares in tandem (see `docs/Link-Compatibility.md`) to keep interoperability.
 
 ## Quick Start
 - Fast path: `tools/target-build.sh --target esp32s3-devkitc --flash` (or `esp32-devkitc`) reads `targets/<name>.def`, installs the right partition map, compiles, and uploads the image + LittleFS in one step.
@@ -43,6 +48,7 @@ Firmware for a Wi-Fi MCU system controller for a DIY car stereo using an ADAU170
   - `DSP-Bundle-How-To.md` — exporting SigmaStudio binaries, crafting interface XML, uploading/pushing bundles, and saving presets.
   - `Build-and-Flash.md` — helper scripts, unified flashing, and verification steps.
   - `Thermistor-Calibration.md` — two-point workflow and REST payload examples.
+- Link protocol guardrails live in `docs/Link-Compatibility.md` so Bootbox and bt2i2s stay in sync.
 - Push the same files to `https://github.com/graysam/bootbox-mcu-fw.wiki.git` when the public wiki is enabled.
 
 ## Hardware Connections
@@ -53,7 +59,7 @@ Firmware for a Wi-Fi MCU system controller for a DIY car stereo using an ADAU170
 | Thermistor 2 | GPIO35 (ADC1_7) | GPIO5 (ADC1_4) | Same harness as channel 1. |
 | Fan 1 PWM | GPIO25 | GPIO16 | Drives MOSFET gate (3-wire) or PWM lead (4-wire). |
 | Fan 2 PWM | GPIO26 | GPIO17 | Optional; set to `-1` to disable. |
-| Tach input | GPIO27 | GPIO18 | Reserved for future RPM capture. |
+| Tach input | GPIO27 | GPIO18 (fan1), GPIO7 (fan2 optional) | 4-wire fans only; disable with `-1` if unused. |
 | Status LED | GPIO2 (active-low) | `LED_BUILTIN` (RGB, active-high) | Set `STATUS_LED_PIN = -1` to disable. |
 | I²C SDA/SCL | GPIO21 / GPIO22 | GPIO8 / GPIO9 | Pull-ups (2.2–4.7 kΩ) recommended near the MCU. |
 | ADAU RESET | Configurable (default -1) | Configurable (default -1) | Tie to codec reset through a transistor if voltages differ. |
@@ -63,7 +69,7 @@ Firmware for a Wi-Fi MCU system controller for a DIY car stereo using an ADAU170
 - Fan control:
   - `kFanType` (3-wire vs 4-wire) lives in `config.h`. Three-wire modes enforce a configurable minimum start duty.
   - PWM frequency defaults to 25 kHz (4-wire) or 1 kHz (3-wire). Adjust `FAN_PWM_FREQ_*` if your fans prefer different carriers.
-  - Tach inputs are not sampled yet but the pads are broken out for future RPM capture using PCNT/RMT.
+  - Tach inputs are sampled for 4-wire fans; leave pins at `-1` to disable.
 - ADAU1701 control bus:
   - `PIN_I2C_SDA`/`PIN_I2C_SCL` follow the table above and can be overridden if you relocate the bus.
   - `ADAU_I2C_ADDR` (0x34) streams live parameters; `ADAU_EEPROM_I2C_ADDR` (0x50) programs the self-boot EEPROM.
@@ -77,7 +83,7 @@ Firmware for a Wi-Fi MCU system controller for a DIY car stereo using an ADAU170
 - Identity enforcement is optional: leave `PORT_ID_*` blank in the `.def` file or pass `--skip-identity` to bypass the `udevadm` verification when pairing a board for the first time.
 
 ## Libraries
-- ESPAsyncWebServer, AsyncTCP, ArduinoJson, LittleFS, Preferences (Arduino core). Install via Boards Manager/Library Manager.
+- ESPAsyncWebServer, AsyncTCP, ESP32-A2DP (vendored), ArduinoJson, LittleFS, Preferences (Arduino core). Install via Boards Manager/Library Manager where not vendored.
 
 ## Thermistor calibration workflow
 1. Wire your probes + divider, update `config.h` with approximate defaults (e.g. 10k/10k, β=3950).

@@ -468,3 +468,10 @@ Prompt: please now thoroughly comb through the bootbox code specifically... ensu
 Prompt: Please also flesh out and complete the implementation of the 4-wire fan tachometer feedback...
 - firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
   - Implemented 4-wire fan tach counting (interrupt-driven), RPM calculation, and state reporting; gated tach data to 4-wire mode only and kept 3-wire as default. Added per-fan RPM plus representative RPM in API/WS state and initialized tach hardware during setup.
+Prompt: consolidate bt2i2s into bootbox repo and keep link compatibility in sync
+- firmware/arduino/bt2i2s
+  - Imported the bt2i2s firmware (A2DP/AVRCP sink + UART link) into the repo for side-by-side development with Bootbox.
+- firmware/arduino/libraries/ESP32-A2DP
+  - Vendored the ESP32-A2DP library to support the bt2i2s build from this repo.
+- README.md / docs/Link-Compatibility.md
+  - Documented the dual-firmware layout, build entry points, S3 tach pins, and added a link-compatibility checklist to keep Bootbox/bt2i2s changes in lockstep.
