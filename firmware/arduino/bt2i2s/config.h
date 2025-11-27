@@ -1,6 +1,7 @@
 #pragma once
 // Central configuration for the BT->I2S bridge firmware.
 // Adjust pins and defaults here before building.
+#include "../common/link_config.h"
 
 // ---- Firmware identity ----
 static constexpr char FW_VERSION[] = "dev";
@@ -31,9 +32,7 @@ static constexpr bool I2S_USE_APLL = false; // enable if you need the APLL for l
 static constexpr int LINK_UART_NUM = 2; // 1 or 2; Serial2 is common on ESP32
 static constexpr int PIN_LINK_TX = 17;
 static constexpr int PIN_LINK_RX = 16;
-static constexpr uint32_t LINK_UART_BAUD = 921600;
-static constexpr uint32_t LINK_STATUS_INTERVAL_MS = 1000; // heartbeat to Bootbox
-static constexpr uint8_t LINK_PROTO_VERSION = 2;
+static constexpr uint32_t LINK_STATUS_INTERVAL_MS = LINK_HEARTBEAT_MS; // heartbeat to Bootbox
 
 // ---- Debug ----
 static constexpr bool DEBUG_LOG_STATE = true;

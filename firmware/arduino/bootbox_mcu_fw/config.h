@@ -1,6 +1,7 @@
 #pragma once
 // Centralized build-time configuration for BOOTBOX DSP firmware.
 // Adjust pin assignments and fan type here before building.
+#include "../common/link_config.h"
 
 // -------- Target detection --------
 // Force BOOTBOX_TARGET_ESP32 or BOOTBOX_TARGET_ESP32S3 via build flags to override auto-detect.
@@ -127,6 +128,6 @@ static constexpr int PIN_BT_LINK_TX = 17;
 static constexpr int PIN_BT_LINK_RX = 16;
 #endif
 static constexpr int BT_LINK_UART_NUM = 2; // Serial2
-static constexpr uint32_t BT_LINK_BAUD = 921600;
-static constexpr uint32_t BT_LINK_HEARTBEAT_MS = 1000;
-static constexpr uint32_t BT_LINK_TIMEOUT_MS = 3500;
+static constexpr uint32_t BT_LINK_BAUD = LINK_UART_BAUD;
+static constexpr uint32_t BT_LINK_HEARTBEAT_MS = LINK_HEARTBEAT_MS;
+static constexpr uint32_t BT_LINK_TIMEOUT_MS = LINK_TIMEOUT_MS;

@@ -475,3 +475,10 @@ Prompt: consolidate bt2i2s into bootbox repo and keep link compatibility in sync
   - Vendored the ESP32-A2DP library to support the bt2i2s build from this repo.
 - README.md / docs/Link-Compatibility.md
   - Documented the dual-firmware layout, build entry points, S3 tach pins, and added a link-compatibility checklist to keep Bootbox/bt2i2s changes in lockstep.
+Prompt: continue integration, share config, ensure link sync
+- firmware/arduino/common/link_config.h
+  - Added a shared link/protocol header for baud/heartbeat/timeout/proto version so Bootbox and bt2i2s stay aligned.
+- firmware/arduino/bootbox_mcu_fw/config.h
+  - Switched link timing/baud to reference the shared link config.
+- firmware/arduino/bt2i2s/config.h
+  - Included the shared link config and reused its baud/heartbeat/proto settings; kept only board-specific pin selections.
