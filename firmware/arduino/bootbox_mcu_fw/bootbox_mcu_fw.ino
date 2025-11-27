@@ -354,12 +354,40 @@ static const Pattern* activePattern = nullptr;
 static uint8_t stepIndex = 0;
 static uint32_t stepStartMs = 0;
 static bool ready = false;
+static uint8_t colorR = 255, colorG = 255, colorB = 255;
+
+struct Rgb { uint8_t r; uint8_t g; uint8_t b; };
+
+static Rgb colorFor(Status status) {
+  switch (status) {
+    case Status::Boot: return {64, 200, 255}; // icy cyan pulse
+    case Status::SystemOk: return {30, 180, 140}; // teal
+    case Status::SystemRunningCheckLogs: return {255, 200, 80}; // warm amber
+    case Status::GeneralError: return {255, 120, 90}; // coral
+    case Status::ThermalError: return {255, 80, 0}; // hot orange
+    case Status::NetworkError: return {120, 90, 255}; // violet
+    case Status::BluetoothError: return {80, 150, 255}; // sky blue
+    case Status::DspCommError: return {255, 70, 170}; // magenta punch
+    case Status::CheckDsp: return {160, 220, 120}; // mint
+    case Status::CriticalError: return {255, 0, 80}; // neon pink
+  }
+  return {255, 255, 255};
+}
 
 inline void write(uint8_t level) {
   if (!ready) return;
+#if STATUS_LED_IS_NEOPIXEL
+  uint8_t scaled = level ? level : 0;
+  // Level acts as brightness (0-255). Patterns still use 0/1 so this maps to off/on; adjust here if you add multi-level patterns.
+  uint8_t r = (colorR * scaled) / 255;
+  uint8_t g = (colorG * scaled) / 255;
+  uint8_t b = (colorB * scaled) / 255;
+  neopixelWrite(PIN, r, g, b);
+#else
   const uint8_t high = ACTIVE_HIGH ? HIGH : LOW;
   const uint8_t low = ACTIVE_HIGH ? LOW : HIGH;
   digitalWrite(PIN, level ? high : low);
+#endif
 }
 
 void apply(const Pattern& pattern) {
@@ -397,6 +425,8 @@ void set(Status status, bool force = false) {
   if (!ready) return;
   if (!force && status == current) return;
   current = status;
+  Rgb c = colorFor(status);
+  colorR = c.r; colorG = c.g; colorB = c.b;
   apply(patternFor(status));
 }
 

@@ -57,6 +57,9 @@ static constexpr uint8_t FAN3_MIN_START_PCT = 25;
 #if defined(BOOTBOX_TARGET_ESP32S3)
 #  ifdef LED_BUILTIN
 static constexpr int STATUS_LED_PIN = static_cast<int>(LED_BUILTIN); // maps to the onboard RGB LED helper
+#    ifndef STATUS_LED_IS_NEOPIXEL
+#      define STATUS_LED_IS_NEOPIXEL 1
+#    endif
 #  else
 static constexpr int STATUS_LED_PIN = -1;
 #  endif
@@ -65,6 +68,9 @@ static constexpr bool STATUS_LED_ACTIVE_HIGH = true;
 static constexpr int STATUS_LED_PIN = 2;
 // Most classic ESP32 dev boards drive the builtin LED low to turn it on.
 static constexpr bool STATUS_LED_ACTIVE_HIGH = false;
+#ifndef STATUS_LED_IS_NEOPIXEL
+#define STATUS_LED_IS_NEOPIXEL 0
+#endif
 #endif
 
 // -------- Thermal sensors --------
