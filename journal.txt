@@ -490,3 +490,23 @@ Prompt: continue integration after bt2i2s crash while booting; align link protoc
 - Builds/Uploads
   - bt2i2s: `arduino-cli compile --fqbn esp32:esp32:esp32 --build-path .arduino-build-bt --export-binaries --libraries firmware/arduino/libraries firmware/arduino/bt2i2s`
   - Uploaded to /dev/ttyUSB0 via `arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32 --input-dir .arduino-build-bt`; device now boots cleanly and emits hello/bt_state frames (no Guru panic).
+Prompt: troubleshoot UI/link errors between Bootbox S3 and bt2i2s WROOM; stabilize UART protocol
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
+  - Made hello frames use shared proto version and boosted BT link RX buffer to 2048. Added parsing of devices arrays inside bt_state frames and added a fallback hello request when no hello seen despite traffic. API /api/bt/cmd now accepts query params alongside JSON bodies to avoid missing_cmd responses.
+- firmware/arduino/bt2i2s/bt2i2s.ino
+  - Hardened A2DP init against null outputs and added periodic hello broadcasts. Added link_proto in state/devices frames, sanitized device names, and included device arrays inside bt_state frames. Switched link packet handling to String-based parsing to avoid null pointer issues and silenced missing_cmd for get/hello. Added UART RX logging for debugging.
+- Builds/Uploads
+  - Bootbox S3 (USB CDC, 16MB flash, default_8MB) rebuilt/uploaded with bundled LittleFS via tools/arduino-upload.sh.
+  - bt2i2s WROOM rebuilt with local libs and uploaded via arduino-cli upload (/dev/ttyUSB0).
+- Observations
+  - bt2i2s no longer panics; link heartbeats/hello/state flow cleanly. Bootbox API reachable and bt link shows link_proto 2; web UI assets restored. Device list still not surfacing in /api/bt/devices despite bt_state carrying devices; further parsing debug may be needed.
+Prompt: continue debugging bt device list/`bt_cmd_missing`
+- firmware/arduino/bootbox_mcu_fw/bootbox_mcu_fw.ino
+  - Switched UART link parsing to DynamicJsonDocument with RX cap 8192, increased UART read timeout to 20ms.
+  - Added instrumentation for bt_state/bt_devices arrays and logging of device lengths/raw to trace parsing.
+  - Fixed device-array ingestion by using JsonArrayConst (no is<JsonArray> reliance) so devices now populate state/devices API.
+  - Added server-side logging when WS bt_cmd lacks a cmd for future diagnosis.
+- firmware/arduino/bt2i2s/bt2i2s.ino
+  - Added debug prints when including device arrays in state/devices frames to confirm contents on the link.
+- Results
+  - /api/bt/devices now shows paired device list from bt2i2s; device array successfully parsed on Bootbox. No bt_cmd_missing seen after instrumentation.

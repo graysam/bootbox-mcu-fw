@@ -54,7 +54,20 @@ static uint32_t g_last_status_ms = 0;
 static bool g_pairing_active = false;
 static uint32_t g_pairing_until_ms = 0;
 static uint32_t g_last_connect_attempt_ms = 0;
+static uint32_t g_last_hello_tx_ms = 0;
 static Preferences g_prefs;
+
+static String sanitize_label(const String& in) {
+  String out;
+  out.reserve(in.length());
+  for (size_t i = 0; i < in.length(); ++i) {
+    char c = in.charAt(i);
+    if (c >= 32 && c < 127) {
+      out += c;
+    }
+  }
+  return out;
+}
 
 static uint8_t clamp_pct(int value) {
   if (value < 0) return 0;
@@ -141,6 +154,10 @@ void loop() {
   autoconnect_tick();
 
   const uint32_t now = millis();
+  if (now - g_last_hello_tx_ms >= LINK_STATUS_INTERVAL_MS * 4) {
+    g_last_hello_tx_ms = now;
+    publish_hello("heartbeat");
+  }
   if (now - g_last_status_ms >= LINK_STATUS_INTERVAL_MS) {
     g_last_status_ms = now;
     publish_link_state("heartbeat");
@@ -410,10 +427,14 @@ static void on_connection_state(esp_a2d_connection_state_t state, void*) {
       if (PairedDevice* d = find_device(g_state.device_addr)) {
         d->connected = true;
         d->last_seen_ms = millis();
-        if (!g_state.device_name.isEmpty()) d->name = g_state.device_name;
+      if (!g_state.device_name.isEmpty()) d->name = g_state.device_name;
       }
       persist_devices();
       publish_devices("connection");
+      Serial.printf("[bt] conn: devices=%u (addr=%s name=%s)\n",
+        static_cast<unsigned>(g_devices.size()),
+        g_state.device_addr.c_str(),
+        g_state.device_name.c_str());
     }
   }
   if (!g_state.a2dp_connected) {
@@ -492,6 +513,7 @@ static void poll_link_rx() {
     if (line.isEmpty()) {
       continue;
     }
+    Serial.printf("[link-rx] %s\n", line.c_str());
     StaticJsonDocument<LINK_RX_CAPACITY> doc;
     DeserializationError err = deserializeJson(doc, line);
     if (err) {
@@ -504,77 +526,78 @@ static void poll_link_rx() {
 
 static void handle_link_packet(const JsonDocument& doc) {
   JsonVariantConst reply_id = doc["id"];
-  const char* type = doc["type"] | nullptr;
-  const char* cmd = doc["cmd"] | nullptr;
+  String type = doc["type"] | "";
 
-  if (type != nullptr) {
-    if (strcmp(type, "hello") == 0) {
+  if (!type.isEmpty()) {
+    if (type.equalsIgnoreCase("hello")) {
       publish_hello("rx", reply_id);
       return;
     }
-    if (strcmp(type, "get") == 0) {
-      const char* what = doc["what"] | nullptr;
-      if (what != nullptr && strcmp(what, "state") == 0) {
+    if (type.equalsIgnoreCase("get")) {
+      String what = doc["what"] | "";
+      if (what.equalsIgnoreCase("state")) {
         publish_link_state("get", reply_id);
-      } else if (what != nullptr && strcmp(what, "hello") == 0) {
+      } else if (what.equalsIgnoreCase("hello")) {
         publish_hello("get", reply_id);
-      } else if (what != nullptr && strcmp(what, "devices") == 0) {
+      } else if (what.equalsIgnoreCase("devices")) {
         publish_devices("get", reply_id);
       } else {
-        send_error("unknown_get", (what != nullptr) ? what : "missing", reply_id);
+        send_error("unknown_get", what.length() ? what.c_str() : "missing", reply_id);
       }
       return;
     }
-    if (strcmp(type, "cmd") == 0 || strcmp(type, "control") == 0) {
+    if (type.equalsIgnoreCase("cmd") || type.equalsIgnoreCase("control")) {
       // fall through to cmd handling
     } else {
-      send_error("unknown_type", type, reply_id);
+      send_error("unknown_type", type.c_str(), reply_id);
       return;
     }
   }
-  if (cmd == nullptr) {
+  String cmd = doc["cmd"] | "";
+  if (cmd.isEmpty()) {
+    if (type.equalsIgnoreCase("hello") || type.equalsIgnoreCase("get")) return;
     send_error("missing_cmd", "cmd field required", reply_id);
     return;
   }
-  if (strcmp(cmd, "play") == 0) {
+  if (cmd.equalsIgnoreCase("play")) {
     a2dp_sink.play();
-    send_ack(cmd, reply_id);
-  } else if (strcmp(cmd, "pause") == 0) {
+    send_ack(cmd.c_str(), reply_id);
+  } else if (cmd.equalsIgnoreCase("pause")) {
     a2dp_sink.pause();
-    send_ack(cmd, reply_id);
-  } else if (strcmp(cmd, "toggle") == 0) {
+    send_ack(cmd.c_str(), reply_id);
+  } else if (cmd.equalsIgnoreCase("toggle")) {
     if (g_state.playing) {
       a2dp_sink.pause();
     } else {
       a2dp_sink.play();
     }
-    send_ack(cmd, reply_id);
-  } else if (strcmp(cmd, "next") == 0) {
+    send_ack(cmd.c_str(), reply_id);
+  } else if (cmd.equalsIgnoreCase("next")) {
     a2dp_sink.next();
-    send_ack(cmd, reply_id);
-  } else if (strcmp(cmd, "prev") == 0 || strcmp(cmd, "previous") == 0) {
+    send_ack(cmd.c_str(), reply_id);
+  } else if (cmd.equalsIgnoreCase("prev") || cmd.equalsIgnoreCase("previous")) {
     a2dp_sink.previous();
-    send_ack(cmd, reply_id);
-  } else if (strcmp(cmd, "volume") == 0) {
+    send_ack(cmd.c_str(), reply_id);
+  } else if (cmd.equalsIgnoreCase("volume")) {
     if (doc["pct"].is<int>()) {
       apply_volume_pct(doc["pct"].as<int>(), true, reply_id);
     } else {
       send_error("missing_pct", "pct required", reply_id);
     }
-  } else if (strcmp(cmd, "state") == 0) {
+  } else if (cmd.equalsIgnoreCase("state")) {
     publish_link_state("cmd_state", reply_id);
-  } else if (strcmp(cmd, "hello") == 0) {
+  } else if (cmd.equalsIgnoreCase("hello")) {
     publish_hello("cmd", reply_id);
-  } else if (strcmp(cmd, "pair_start") == 0) {
+  } else if (cmd.equalsIgnoreCase("pair_start")) {
     uint32_t timeout_ms = doc["timeout_ms"] | PAIRING_DEFAULT_MS;
     set_pairing_mode(true, timeout_ms);
-    send_ack(cmd, reply_id);
+    send_ack(cmd.c_str(), reply_id);
     publish_devices("pair_start");
-  } else if (strcmp(cmd, "pair_stop") == 0 || strcmp(cmd, "pair_cancel") == 0) {
+  } else if (cmd.equalsIgnoreCase("pair_stop") || cmd.equalsIgnoreCase("pair_cancel")) {
     set_pairing_mode(false);
-    send_ack(cmd, reply_id);
+    send_ack(cmd.c_str(), reply_id);
     publish_devices("pair_stop");
-  } else if (strcmp(cmd, "forget") == 0) {
+  } else if (cmd.equalsIgnoreCase("forget")) {
     const char* addr = doc["addr"] | nullptr;
     if (!addr || strlen(addr) == 0) {
       send_error("missing_addr", "addr required", reply_id);
@@ -596,9 +619,9 @@ static void handle_link_packet(const JsonDocument& doc) {
     g_devices.erase(std::remove_if(g_devices.begin(), g_devices.end(),
       [&](const PairedDevice& d){ return d.addr.equalsIgnoreCase(addr); }), g_devices.end());
     persist_devices();
-    send_ack(cmd, reply_id);
+    send_ack(cmd.c_str(), reply_id);
     publish_devices("forget");
-  } else if (strcmp(cmd, "priority") == 0) {
+  } else if (cmd.equalsIgnoreCase("priority")) {
     if (!doc["order"].is<JsonArray>()) {
       send_error("missing_order", "order array required", reply_id);
       return;
@@ -620,9 +643,9 @@ static void handle_link_packet(const JsonDocument& doc) {
       g_devices[i].priority = static_cast<int>(i + 1);
     }
     persist_devices();
-    send_ack(cmd, reply_id);
+    send_ack(cmd.c_str(), reply_id);
     publish_devices("priority");
-  } else if (strcmp(cmd, "connect") == 0) {
+  } else if (cmd.equalsIgnoreCase("connect")) {
     const char* addr = doc["addr"] | nullptr;
     if (!addr || strlen(addr) == 0) {
       send_error("missing_addr", "addr required", reply_id);
@@ -636,11 +659,11 @@ static void handle_link_packet(const JsonDocument& doc) {
     esp_err_t err = esp_a2d_sink_connect(target);
     if (err == ESP_OK) {
       g_last_connect_attempt_ms = millis();
-      send_ack(cmd, reply_id);
+      send_ack(cmd.c_str(), reply_id);
     } else {
       send_error("connect_failed", String(err).c_str(), reply_id);
     }
-  } else if (strcmp(cmd, "disconnect") == 0) {
+  } else if (cmd.equalsIgnoreCase("disconnect")) {
     if (!g_state.a2dp_connected) {
       send_error("not_connected", "no active link", reply_id);
       return;
@@ -652,12 +675,12 @@ static void handle_link_packet(const JsonDocument& doc) {
     }
     esp_err_t err = esp_a2d_sink_disconnect(*peer);
     if (err == ESP_OK) {
-      send_ack(cmd, reply_id);
+      send_ack(cmd.c_str(), reply_id);
     } else {
       send_error("disconnect_failed", String(err).c_str(), reply_id);
     }
   } else {
-    send_error("unknown_cmd", cmd, reply_id);
+    send_error("unknown_cmd", cmd.c_str(), reply_id);
   }
 }
 
@@ -677,10 +700,11 @@ static void publish_link_state(const char* reason, JsonVariantConst reply_id) {
       d->last_seen_ms = millis();
     }
   }
-  StaticJsonDocument<LINK_TX_CAPACITY> doc;
+  DynamicJsonDocument doc(LINK_TX_CAPACITY);
   doc["type"] = "bt_state";
   doc["reason"] = reason;
   attach_id(doc, reply_id);
+  doc["link_proto"] = LINK_PROTO_VERSION;
   doc["connected"] = g_state.a2dp_connected;
   doc["avrcp"] = g_state.avrcp_connected;
   doc["audio_active"] = g_state.audio_active;
@@ -694,6 +718,23 @@ static void publish_link_state(const char* reason, JsonVariantConst reply_id) {
   if (!g_state.album.isEmpty()) doc["album"] = g_state.album;
   doc["paired_count"] = static_cast<uint32_t>(g_devices.size());
   doc["pairing_supported"] = true;
+  if (!g_devices.empty()) {
+    Serial.printf("[link] include %u devices in state\n", static_cast<unsigned>(g_devices.size()));
+    JsonArray devices = doc.createNestedArray("devices");
+    std::vector<PairedDevice> sorted = g_devices;
+    std::sort(sorted.begin(), sorted.end(), [](const PairedDevice& a, const PairedDevice& b){
+      return a.priority < b.priority;
+    });
+    for (const auto& d : sorted) {
+      if (!d.addr.length()) continue;
+      JsonObject obj = devices.createNestedObject();
+      obj["addr"] = d.addr;
+      if (d.name.length()) obj["name"] = sanitize_label(d.name);
+      obj["priority"] = d.priority;
+      obj["connected"] = d.connected;
+      obj["last_seen_ms"] = d.last_seen_ms;
+    }
+  }
   JsonObject pairing = doc.createNestedObject("pairing");
   pairing["active"] = g_pairing_active;
   if (g_pairing_active && g_pairing_until_ms > millis()) {
@@ -706,9 +747,10 @@ static void publish_link_state(const char* reason, JsonVariantConst reply_id) {
 }
 
 static void publish_devices(const char* reason, JsonVariantConst reply_id) {
-  StaticJsonDocument<LINK_TX_CAPACITY> doc;
+  DynamicJsonDocument doc(LINK_TX_CAPACITY);
   doc["type"] = "bt_devices";
   doc["reason"] = reason;
+  doc["link_proto"] = LINK_PROTO_VERSION;
   attach_id(doc, reply_id);
   JsonObject pairing = doc.createNestedObject("pairing");
   pairing["active"] = g_pairing_active;
@@ -718,6 +760,7 @@ static void publish_devices(const char* reason, JsonVariantConst reply_id) {
     pairing["remaining_ms"] = 0;
   }
   doc["pairing_supported"] = true;
+  Serial.printf("[link] publish_devices count=%u\n", static_cast<unsigned>(g_devices.size()));
   JsonArray arr = doc.createNestedArray("devices");
   std::vector<PairedDevice> sorted = g_devices;
   std::sort(sorted.begin(), sorted.end(), [](const PairedDevice& a, const PairedDevice& b){
@@ -727,7 +770,7 @@ static void publish_devices(const char* reason, JsonVariantConst reply_id) {
     if (!d.addr.length()) continue;
     JsonObject obj = arr.createNestedObject();
     obj["addr"] = d.addr;
-    if (d.name.length()) obj["name"] = d.name;
+    if (d.name.length()) obj["name"] = sanitize_label(d.name);
     obj["priority"] = d.priority;
     obj["connected"] = d.connected;
     obj["last_seen_ms"] = d.last_seen_ms;
@@ -736,7 +779,7 @@ static void publish_devices(const char* reason, JsonVariantConst reply_id) {
 }
 
 static void publish_hello(const char* reason, JsonVariantConst reply_id) {
-  StaticJsonDocument<LINK_TX_CAPACITY> doc;
+  DynamicJsonDocument doc(LINK_TX_CAPACITY);
   doc["type"] = "hello";
   doc["reason"] = reason;
   doc["fw"] = "bt2i2s";
@@ -766,6 +809,7 @@ static void publish_hello(const char* reason, JsonVariantConst reply_id) {
   cmds.add("disconnect");
   cmds.add("devices");
   link_send(doc, true);
+  g_last_hello_tx_ms = millis();
 }
 
 static void send_ack(const char* cmd, JsonVariantConst reply_id) {

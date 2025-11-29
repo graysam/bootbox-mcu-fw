@@ -59,7 +59,7 @@ static bool littlefs_ready = false;
 static esp_reset_reason_t last_reset_reason = ESP_RST_UNKNOWN;
 
 // ---- Bluetooth link to bt2i2s ----
-static constexpr size_t BT_LINK_RX_CAP = 1024;
+static constexpr size_t BT_LINK_RX_CAP = 8192;
 static constexpr size_t BT_LINK_TX_CAP = 1280;
 static constexpr const char* BT_LINK_FW_NAME = "bt2i2s";
 
@@ -501,7 +501,7 @@ static void btLinkInit() {
     bt_link_serial = &Serial2;
   }
   bt_link_serial->begin(BT_LINK_BAUD, SERIAL_8N1, PIN_BT_LINK_RX, PIN_BT_LINK_TX);
-  bt_link_serial->setTimeout(5);
+  bt_link_serial->setTimeout(20);
   bt_link_ready = true;
   addLog(String("[bt-link] UART ready TX=") + PIN_BT_LINK_TX + " RX=" + PIN_BT_LINK_RX + " @" + BT_LINK_BAUD);
   btLinkSendHello("boot");
@@ -543,7 +543,34 @@ static void btLinkHandleBtState(const JsonDocument& doc) {
   if (doc.containsKey("peer_addr")) bt_link_state.peer_addr = String(doc["peer_addr"].as<const char*>());
   if (doc.containsKey("peer_name")) bt_link_state.peer_name = String(doc["peer_name"].as<const char*>());
   if (doc.containsKey("fw_version")) bt_link_state.fw_version = String(doc["fw_version"].as<const char*>());
-  if (doc.containsKey("pairing_supported")) bt_link_state.pairing_supported = doc["pairing_supported"].as<bool>();
+  if (doc.containsKey("link_proto")) {
+    bt_link_state.proto = doc["link_proto"].as<uint8_t>();
+    // Treat presence of a proto-bearing frame as equivalent to a hello for compatibility.
+    if (!bt_link_state.hello_seen && bt_link_state.proto > 0) {
+      bt_link_state.hello_seen = true;
+    }
+  }
+  if (doc.containsKey("pairing_supported")) {
+    bt_link_state.pairing_supported = doc["pairing_supported"].as<bool>();
+  } else if (bt_link_state.proto >= 2) {
+    bt_link_state.pairing_supported = true;
+  }
+  if (doc.containsKey("devices")) {
+    JsonArrayConst arr = doc["devices"].as<JsonArrayConst>();
+    const auto len = arr.isNull() ? 0u : static_cast<unsigned>(arr.size());
+    addLog(String("[bt-link] bt_state devices len=") + len);
+    bt_link_state.devices.clear();
+    for (JsonObjectConst obj : arr) {
+      BtDeviceInfo d;
+      d.addr = obj["addr"] | "";
+      d.name = obj["name"] | "";
+      d.priority = obj["priority"] | 0;
+      d.connected = obj["connected"] | false;
+      d.last_seen_ms = obj["last_seen_ms"] | 0;
+      if (d.addr.length()) bt_link_state.devices.push_back(d);
+    }
+    addLog(String("[bt-link] state devices=") + bt_link_state.devices.size());
+  }
   if (doc["pairing"].is<JsonObject>()) {
     JsonObjectConst pairing = doc["pairing"].as<JsonObjectConst>();
     bt_link_state.pairing.active = pairing["active"] | false;
@@ -561,8 +588,11 @@ static void btLinkHandleDevices(const JsonDocument& doc) {
   bt_link_state.last_seen_ms = millis();
   bt_link_state.last_seen_age_ms = 0;
   bt_link_state.devices.clear();
-  if (doc.containsKey("devices") && doc["devices"].is<JsonArray>()) {
-    for (JsonObjectConst obj : doc["devices"].as<JsonArrayConst>()) {
+  if (doc.containsKey("devices")) {
+    JsonArrayConst arr = doc["devices"].as<JsonArrayConst>();
+    const auto len = arr.isNull() ? 0u : static_cast<unsigned>(arr.size());
+    addLog(String("[bt-link] bt_devices len=") + len);
+    for (JsonObjectConst obj : arr) {
       BtDeviceInfo d;
       d.addr = obj["addr"] | "";
       d.name = obj["name"] | "";
@@ -580,14 +610,17 @@ static void btLinkHandleDevices(const JsonDocument& doc) {
   if (doc.containsKey("pairing_supported")) {
     bt_link_state.pairing_supported = doc["pairing_supported"].as<bool>();
   }
+  addLog(String("[bt-link] devices count=") + bt_link_state.devices.size() + " (bt_devices)");
   btLinkBroadcastDevices();
 }
 
 static void btLinkHandleLine(const String& line) {
-  StaticJsonDocument<BT_LINK_RX_CAP> doc;
+  DynamicJsonDocument doc(BT_LINK_RX_CAP);
   DeserializationError err = deserializeJson(doc, line);
   if (err) {
     addLog(String("[bt-link] bad json: ") + err.c_str());
+    Serial.print("[bt-link rx bad] ");
+    Serial.println(line);
     return;
   }
   const char* type = doc["type"] | "";
@@ -597,10 +630,24 @@ static void btLinkHandleLine(const String& line) {
     return;
   }
   if (strcmp(type, "bt_state") == 0) {
+    if (doc.containsKey("devices") && doc["devices"].is<JsonArray>()) {
+      Serial.printf("[bt-link rx state devices=%u]\n", static_cast<unsigned>(doc["devices"].size()));
+    }
+    if (doc.containsKey("devices")) {
+      String raw;
+      serializeJson(doc["devices"], raw);
+      addLog(String("[bt-link] bt_state devices raw=") + raw);
+    }
     btLinkHandleBtState(doc);
     return;
   }
   if (strcmp(type, "bt_devices") == 0) {
+    Serial.printf("[bt-link rx devices=%u]\n", static_cast<unsigned>(doc["devices"].size()));
+    if (doc.containsKey("devices")) {
+      String raw;
+      serializeJson(doc["devices"], raw);
+      addLog(String("[bt-link] bt_devices raw=") + raw);
+    }
     btLinkHandleDevices(doc);
     return;
   }
@@ -653,6 +700,15 @@ static void btLinkTick() {
 
   if (!bt_link_state.online && now - bt_last_hello_sent_ms >= BT_LINK_HEARTBEAT_MS) {
     btLinkSendHello("poll");
+  } else if (bt_link_state.online && !bt_link_state.hello_seen &&
+             now - bt_last_hello_sent_ms >= BT_LINK_HEARTBEAT_MS * 2) {
+    // We are seeing traffic but never observed a hello; explicitly request one.
+    StaticJsonDocument<192> doc;
+    doc["type"] = "get";
+    doc["what"] = "hello";
+    doc["id"] = bt_cmd_counter++;
+    bt_last_hello_sent_ms = now;
+    btLinkSendDoc(doc, true);
   } else if (bt_link_state.online && now - bt_link_state.last_seen_ms >= BT_LINK_HEARTBEAT_MS * 3) {
     btLinkSendStateRequest();
   }
@@ -946,6 +1002,9 @@ static void onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
       JsonArrayConst order = (data.containsKey("order") && data["order"].is<JsonArray>()) ? data["order"].as<JsonArrayConst>() : JsonArrayConst();
       uint32_t timeout_ms = data["timeout_ms"] | doc["timeout_ms"] | 0;
       if (!cmd || strlen(cmd) == 0) {
+        Serial.print("[ws] bt_cmd missing_cmd from payload: ");
+        serializeJson(doc, Serial);
+        Serial.println();
         StaticJsonDocument<160> errDoc;
         errDoc["type"] = "error";
         errDoc["error"] = "bt_cmd_missing";
@@ -1123,7 +1182,12 @@ static void registerHttpRoutes() {
         return;
       }
       JsonObject obj = json.as<JsonObject>();
-      const char* cmd = obj["cmd"] | nullptr;
+      String cmd_str = obj["cmd"] | "";
+      if (cmd_str.isEmpty()) {
+        if (req->hasParam("cmd", true)) cmd_str = req->getParam("cmd", true)->value();
+        else if (req->hasParam("cmd")) cmd_str = req->getParam("cmd")->value();
+      }
+      const char* cmd = cmd_str.length() ? cmd_str.c_str() : nullptr;
       if (!cmd) {
         sendErr("missing_cmd");
         return;
@@ -1136,7 +1200,16 @@ static void registerHttpRoutes() {
       if (obj.containsKey("pct")) {
         pct = obj["pct"].as<int>();
       }
+      if (pct < 0 && req->hasParam("pct", true)) {
+        pct = req->getParam("pct", true)->value().toInt();
+      }
       const char* addr = obj["addr"] | nullptr;
+      String addr_str;
+      if (!addr || strlen(addr) == 0) {
+        if (req->hasParam("addr", true)) addr_str = req->getParam("addr", true)->value();
+        else if (req->hasParam("addr")) addr_str = req->getParam("addr")->value();
+        if (addr_str.length()) addr = addr_str.c_str();
+      }
       JsonArrayConst order = (obj.containsKey("order") && obj["order"].is<JsonArray>()) ? obj["order"].as<JsonArrayConst>() : JsonArrayConst();
       uint32_t timeout_ms = obj["timeout_ms"] | 0;
       bool sent = false;
